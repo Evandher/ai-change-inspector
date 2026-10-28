@@ -1,0 +1,22 @@
+diff --git a/README.md b/README.md
+index 83db48f..f735c60 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1 @@
+-# Demo
++# AI Change Inspector
+diff --git a/src/new.py b/src/new.py
+new file mode 100644
+index 0000000..83db48f
+--- /dev/null
++++ b/src/new.py
+@@ -0,0 +1,2 @@
++def ready():
++    return True
+diff --git a/legacy.txt b/legacy.txt
+deleted file mode 100644
+index 83db48f..0000000
+--- a/legacy.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-obsolete

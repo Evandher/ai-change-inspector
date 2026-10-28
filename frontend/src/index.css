@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@layer base {
+  :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; color-scheme: dark; }
+  body { margin: 0; min-width: 320px; }
+  button, a, summary, textarea { outline-offset: 4px; }
+  :focus-visible { outline: 2px solid var(--color-teal-300); }
+  button:not(:disabled) { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+}
+
+@layer components {
+  .secondary-button {
+    @apply rounded-lg border border-slate-700 px-3 py-2 text-xs font-medium text-slate-300 transition-colors hover:border-slate-500 hover:bg-slate-800 disabled:opacity-40;
+  }
+}

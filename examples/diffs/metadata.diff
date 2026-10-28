@@ -1,0 +1,14 @@
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+rename from old name.txt
+rename to new name.txt
+diff --git a/template.txt b/copy.txt
+similarity index 100%
+copy from template.txt
+copy to copy.txt
+diff --git a/run.sh b/run.sh
+old mode 100644
+new mode 100755
+diff --git a/image.png b/image.png
+index 83db48f..f735c60 100644
+Binary files a/image.png and b/image.png differ
