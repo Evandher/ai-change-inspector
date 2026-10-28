@@ -2,27 +2,36 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { DiffExplorer } from './components/DiffExplorer'
 import { FindingsPanel } from './components/FindingsPanel'
-import { MAX_DIFF_BYTES, parseDiff } from './lib/api'
+import { MAX_DIFF_BYTES, analyzeDiff, parseDiff } from './lib/api'
 import { examples } from './lib/examples'
 import type { ParsedDiff } from './types/diff'
+import type { AnalysisResponse } from './types/analysis'
 
 export default function App() {
   const [diff, setDiff] = useState('')
   const [result, setResult] = useState<ParsedDiff | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null)
+  const [reviewLoading, setReviewLoading] = useState(false)
+  const [reviewError, setReviewError] = useState('')
+  const busy = loading || reviewLoading
   const bytes = new TextEncoder().encode(diff).length
 
   function updateDiff(value: string) {
     setDiff(value)
     setResult(null)
     setError('')
+    setAnalysis(null)
+    setReviewError('')
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError('')
     setResult(null)
+    setAnalysis(null)
+    setReviewError('')
     if (!diff.trim()) {
       setError('Pega un diff de Git antes de continuar.')
       return
@@ -41,6 +50,22 @@ export default function App() {
     }
   }
 
+  async function handleReview() {
+    if (!result || busy) return
+    setReviewLoading(true)
+    setReviewError('')
+    setAnalysis(null)
+    try {
+      const review = await analyzeDiff(diff)
+      setResult(review.parsed_diff)
+      setAnalysis(review)
+    } catch (cause) {
+      setReviewError(cause instanceof Error ? cause.message : 'No se pudo revisar el diff.')
+    } finally {
+      setReviewLoading(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200">
       <header className="border-b border-slate-800">
@@ -50,7 +75,7 @@ export default function App() {
             <div><h1 className="text-xl font-semibold tracking-tight text-white">AI Change Inspector</h1>
               <p className="mt-1 text-sm text-slate-400">Cada cambio, en contexto.</p></div>
           </div>
-          <span className="rounded-full border border-teal-800 bg-teal-950 px-3 py-1 text-xs text-teal-200">Sprint 1 · Explorador de diffs</span>
+          <span className="rounded-full border border-teal-800 bg-teal-950 px-3 py-1 text-xs text-teal-200">Sprint 2 · Auditor independiente</span>
         </div>
       </header>
       <main className="mx-auto max-w-screen-2xl space-y-8 px-6 py-8">
@@ -59,19 +84,19 @@ export default function App() {
             <div><h2 id="input-title" className="text-lg font-semibold text-white">Inspecciona un cambio</h2>
               <p className="mt-1 text-sm text-slate-400">Pega la salida de <code className="text-teal-200">git diff --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/</code>.</p></div>
             <div className="flex flex-wrap gap-2" aria-label="Ejemplos de diff">
-              {examples.map((example) => <button key={example.label} type="button" className="secondary-button" disabled={loading} onClick={() => updateDiff(example.diff)}>{example.label}</button>)}
+              {examples.map((example) => <button key={example.label} type="button" className="secondary-button" disabled={busy} onClick={() => updateDiff(example.diff)}>{example.label}</button>)}
             </div>
           </div>
           <form onSubmit={handleSubmit}>
             <label htmlFor="diff-input" className="mb-2 block text-sm font-medium">Diff de Git</label>
-            <textarea id="diff-input" value={diff} onChange={(event) => updateDiff(event.target.value)} disabled={loading}
+            <textarea id="diff-input" value={diff} onChange={(event) => updateDiff(event.target.value)} disabled={busy}
               spellCheck={false} placeholder={'diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new'}
               aria-describedby="size-help" className="h-64 w-full resize-y rounded-xl border border-slate-700 bg-slate-950 p-4 font-mono text-sm leading-6 text-slate-200 placeholder:text-slate-600" />
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
               <p id="size-help" className={`text-xs ${bytes > MAX_DIFF_BYTES ? 'text-rose-300' : 'text-slate-400'}`}>{bytes.toLocaleString('es')} / 1.048.576 bytes · UTF-8</p>
               <div className="flex gap-3">
-                <button type="button" className="secondary-button" disabled={loading || !diff} onClick={() => updateDiff('')}>Limpiar</button>
-                <button type="submit" disabled={loading} className="rounded-lg bg-teal-300 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-teal-200 disabled:opacity-50">{loading ? 'Analizando…' : 'Analizar diff'}</button>
+                <button type="button" className="secondary-button" disabled={busy || !diff} onClick={() => updateDiff('')}>Limpiar</button>
+                <button type="submit" disabled={busy} className="rounded-lg bg-teal-300 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-teal-200 disabled:opacity-50">{loading ? 'Analizando…' : 'Analizar diff'}</button>
               </div>
             </div>
           </form>
@@ -80,10 +105,11 @@ export default function App() {
         </section>
         <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
           <DiffExplorer result={result} />
-          <FindingsPanel />
+          <FindingsPanel analysis={analysis} loading={reviewLoading} error={reviewError}
+            canReview={!!result && !busy} onReview={handleReview} />
         </div>
       </main>
-      <footer className="mx-auto max-w-screen-2xl px-6 pb-8 text-xs text-slate-500">Meta AI Developer Hackathon 2026 · GPL v3 · Procesamiento local sin persistencia.</footer>
+      <footer className="mx-auto max-w-screen-2xl px-6 pb-8 text-xs text-slate-500">Meta AI Developer Hackathon 2026 · GPL v3 · Parser local; revisión con Meta bajo petición.</footer>
     </div>
   )
 }

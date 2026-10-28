@@ -1,9 +1,10 @@
 # AI Change Inspector
 
-Explorador de cambios de Git para la Meta AI Developer Hackathon 2026.
-Sprint 1: pegar un diff, validarlo y explorar archivos, hunks y líneas con sus números originales.
-El análisis con modelos queda para un sprint posterior. No hay integración Meta AI, autenticación,
-base de datos ni persistencia de diffs.
+Auditor independiente de cambios de Git para la Meta AI Developer Hackathon 2026.
+Conserva el explorador y parser determinista del Sprint 1. En Sprint 2, Muse Spark 1.3 propone
+riesgos y el backend valida sus referencias de forma independiente. Los hallazgos siguen siendo
+hipótesis, incluso cuando todas sus referencias coinciden con el diff.
+No hay autenticación, base de datos, historial, MCP, Skills ni ejecución de código del diff.
 
 ## Requisitos
 
@@ -26,7 +27,8 @@ npm.cmd ci
 
 `requirements-lock.txt` contiene las versiones exactas de ejecución y desarrollo resueltas en
 Python 3.12/Windows; `requirements.txt` y `requirements-dev.txt` declaran las dependencias directas.
-`package-lock.json` fija la resolución del frontend. No se necesita ningún secreto ni archivo `.env`.
+`package-lock.json` fija la resolución del frontend. El parser no necesita secretos.
+La revisión con Muse Spark requiere `MODEL_API_KEY` solo en el entorno del backend.
 
 Abre dos terminales nuevas en la raíz del repositorio.
 
@@ -34,6 +36,8 @@ Terminal 1:
 
 ```powershell
 cd backend
+# Para la revisión con Meta: define MODEL_API_KEY en esta terminal antes de iniciar Uvicorn.
+# Si está ausente, el parser sigue funcionando y la revisión devuelve un error de configuración.
 .venv/Scripts/python.exe -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -55,25 +59,109 @@ git diff --no-ext-diff --no-color --src-prefix=a/ --dst-prefix=b/
 ```
 
 Se puede añadir `--cached` para cambios staged. Los botones de ejemplo cargan fixtures incluidos
-en el proyecto y no realizan análisis con IA. Cambiar el texto invalida el resultado anterior.
+en el proyecto y no realizan llamadas al modelo. Cambiar el texto invalida los resultados anteriores.
+
+## Sprint 2: revisión con Muse Spark
+
+Configura `MODEL_API_KEY` en el mismo proceso PowerShell desde el que iniciarás el backend.
+Puedes introducirla sin dejar su valor en el historial de comandos:
+
+```powershell
+$modelSecret = Read-Host 'MODEL_API_KEY' -AsSecureString
+$env:MODEL_API_KEY = [System.Net.NetworkCredential]::new('', $modelSecret).Password
+Remove-Variable modelSecret
+```
+
+Después inicia Uvicorn como se indica arriba. `backend/.env.example` documenta el nombre de la
+variable; no se carga automáticamente. Nunca uses `VITE_MODEL_API_KEY` ni envíes la clave al frontend.
+Si el backend ya estaba iniciado sin clave, reinícialo desde esa terminal.
+
+1. Pega el diff o carga un ejemplo y pulsa **Analizar diff**: solo se invoca el parser local.
+2. Pulsa **Revisar con Muse Spark**: se envía el diff parseado a Meta y puede consumir créditos.
+3. El panel muestra el resumen y los riesgos como hipótesis del modelo. Las referencias inválidas
+   se conservan y explican; solo las válidas enlazan al explorador existente.
+4. Las pruebas sugeridas se muestran como texto y nunca se ejecutan.
+
+El proveedor es fijo: `https://api.meta.ai/v1`, modelo `muse-spark-1.3`, SDK Python `openai`,
+Responses API. No se usa OpenAI como proveedor ni se reutiliza `OPENAI_API_KEY`.
+La solicitud usa `text.format={type: "json_schema", name: "diff_review", schema: ..., strict: true}`,
+con objetos cerrados y todos los campos requeridos. La sintaxis está verificada en las referencias
+oficiales de [Meta Responses](https://dev.meta.ai/docs/protocols/responses),
+[esquemas de Responses](https://dev.meta.ai/docs/api-reference/responses/schemas) y
+[Structured Outputs](https://dev.meta.ai/docs/structured-output).
+
+Se envía una sola solicitud, sin herramientas, sin historial, con `store: false`, timeout de
+60 segundos, máximo de 8192 tokens de salida y cero reintentos automáticos. No hay fallback a
+texto libre. Se rechazan rechazos del modelo, respuestas parciales, salidas de herramientas,
+JSON inválido y datos que no cumplen el contrato Pydantic estricto. Los errores del proveedor
+se traducen sin exponer su cuerpo, el diff ni la clave. La clave no se registra explícitamente.
+Los prompts tratan código, comentarios y metadatos como datos no confiables; el modelo no
+recibe herramientas ni capacidad de ejecutar instrucciones incluidas en el diff.
+
+**Alcance de la validación:** archivo por `file_id`, hunk perteneciente al archivo por `hunk_id`,
+ruta exacta del lado `old`/`new`, rango inclusivo presente íntegramente en ese hunk y lado, y
+fragmento literal unido con `\n`, incluidos sus espacios. No se corrigen referencias inventadas
+ni se leen archivos del repositorio. Se preservan los IDs del parser. La validación acredita la
+localización del fragmento, no la certeza del riesgo, su severidad, el resumen ni las pruebas sugeridas.
+
+El límite del parser sigue siendo 1 MiB UTF-8. La revisión además limita el JSON del diff
+parseado a **128 KiB**, antes de cualquier llamada al modelo; si lo supera, pide reducir el diff.
+No se trunca ni se fragmenta silenciosamente. Este es un presupuesto local de entrada, no una
+afirmación sobre la ventana de contexto del proveedor. Los cambios sin hunks textuales se
+rechazan antes de gastar créditos. Los binarios en diffs mixtos solo aportan metadatos.
+
+### POST /api/diff/analyze
+
+Nuevo endpoint propio de la aplicación. Recibe el mismo `{"diff":"..."}` que el parser y
+vuelve a parsearlo en el backend; no confía en IDs enviados por el navegador.
+Devuelve `model`, `summary`, `parsed_diff` y `findings`. Cada hallazgo contiene:
+
+- `hypothesis`: `title`, `severity` (`low`, `medium`, `high`, `critical`), `explanation`,
+  `references` y `suggested_tests`. Como máximo 20 hallazgos, con 1–5 referencias y 1–5 pruebas cada uno.
+- Cada referencia: `file_id`, `hunk_id`, `path`, `side`, `line_start`, `line_end`, `quote`.
+- `reference_checks`: la referencia original, `status` (`valid`/`invalid`), `reason` y
+  `diff_line` (solo no nulo cuando la referencia es válida).
+- `all_references_valid`: resultado del validador determinista, nunca una afirmación de que
+  se haya demostrado el riesgo. Los campos de validación no forman parte de la salida del modelo.
+
+Razones estructurales: `matched`, `file_not_found`, `hunk_not_found`, `path_mismatch`,
+`invalid_range`, `line_not_found`, `quote_mismatch`. Cero hallazgos no certifica ausencia de problemas.
+
+Los errores usan el mismo sobre `error: {code, message, line}` del parser:
+
+| HTTP | Códigos |
+| --- | --- |
+| 413 | `analysis_too_large` |
+| 422 | Errores del parser/entrada y `no_text_changes` |
+| 502 | `model_unavailable`, `model_request_failed`, `model_invalid_response`, `model_invalid_output`, `model_incomplete`, `model_refusal` |
+| 503 | `model_not_configured`, `model_auth_error`, `model_rate_limited` |
+| 504 | `model_timeout` |
+
+Las pruebas automatizadas bloquean el transporte HTTP real del SDK y usan `MockTransport`,
+incluyendo el recorrido endpoint → parser → SDK → JSON Schema → validador. No requieren clave ni
+consumen créditos. Una prueba real con Meta se realiza manualmente con la variable configurada;
+una prueba simulada no acredita disponibilidad del proveedor ni acceso de una cuenta concreta.
 
 ## Estructura
 
 ```text
 backend/
   app/main.py                 # Adaptador HTTP y errores
-  app/models.py               # Contrato Pydantic
+  app/models.py               # Contrato del parser
+  app/analysis_models.py      # Hipótesis y validaciones estructurales separadas
   app/services/diff_parser.py # Parser puro, dataclasses inmutables
+  app/services/model_client.py # Adaptador de Meta Responses
+  app/services/reference_validator.py # Validación sin I/O sobre el diff parseado
   tests/                     # Parser y contrato HTTP
 frontend/
-  src/components/            # DiffExplorer y futuro FindingsPanel separados
+  src/components/            # DiffExplorer y FindingsPanel separados
   src/lib/                   # Cliente HTTP y ejemplos compartidos
   src/types/                 # Contrato TypeScript
 examples/diffs/               # Fixtures válidos y un ejemplo inválido
 AGENTS.md                     # Reglas para agentes que trabajen en el proyecto
 ```
 
-## API del Sprint 1
+## API del parser (Sprint 1, conservada)
 
 ### GET /health
 
@@ -155,9 +243,9 @@ La adaptación a Pydantic ocurre en la capa HTTP.
 - Editar cualquier parte de un bloque cambia su `file_id` y todos sus `hunk_id`. Estos IDs identifican
   una versión del cambio; no prometen continuidad entre revisiones ni commits diferentes.
 
-Para futuros hallazgos, usar `file_id`, `hunk_id`, lado (`old`/`new`) y número de línea de ese lado.
+Para vincular hallazgos, usar `file_id`, `hunk_id`, lado (`old`/`new`) y número de línea de ese lado.
 `diff_line` sirve para localizar el texto de entrada, pero cambia si se anteponen otros archivos.
-El explorador expone IDs de archivo/hunk en el DOM; no existe todavía un contrato de hallazgos de IA.
+El explorador expone IDs de archivo/hunk en el DOM; el panel de hallazgos solo enlaza referencias validadas.
 
 ### Formato soportado y límites
 
@@ -179,6 +267,7 @@ Desde `backend/`:
 
 ```powershell
 .venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe -m pytest -q -W error
 .venv/Scripts/python.exe -m ruff check .
 .venv/Scripts/python.exe -m ruff format --check .
 .venv/Scripts/python.exe -m pip check
@@ -194,7 +283,9 @@ npm.cmd run build
 
 Las pruebas del backend cubren conteos, números de línea, errores, IDs, CRLF, metadatos, rutas,
 binarios y el límite UTF-8 inclusive. Las de frontend usan respuestas controladas para verificar
-el envío, estados de carga/error, texto seguro, navegación y separación del panel futuro.
+el envío, estados de carga/error, texto seguro, navegación y el panel de hipótesis con referencias
+válidas e inválidas. Las pruebas del adaptador ejercitan el SDK con un transporte simulado y
+comprueban el contrato HTTP enviado a Meta, sus errores y los límites antes de enviar.
 No sustituyen una revisión visual en navegador. `npm.cmd audit` consulta el registro y requiere red.
 
 El build genera `frontend/dist/`. El proxy configurado es de desarrollo: un despliegue futuro
@@ -209,6 +300,7 @@ deberá servir la API bajo el mismo origen o definir su propia estrategia de rut
 - Tailwind utiliza su plugin de Vite, sin duplicar configuración de PostCSS.
 - Las entradas se presentan como texto React, sin `dangerouslySetInnerHTML`.
 - El diff no se almacena ni se registra explícitamente; Uvicorn conserva su logging HTTP habitual.
+  Solo la acción de revisar envía el diff parseado a Meta con `store: false`.
 - Las pruebas HTTP usan `HTTPX AsyncClient` con `ASGITransport` y el plugin pytest de AnyIO
   sobre asyncio, como en la guía oficial de pruebas asíncronas de FastAPI. Se evita la ruta
   de compatibilidad de `Starlette TestClient` con HTTPX, deprecada en Starlette 1.10.0,
