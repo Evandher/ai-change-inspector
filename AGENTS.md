@@ -169,9 +169,9 @@ Do not generate unnecessary documentation files.
 
 Preserve existing behavior.
 
-### Sprint 2 — Active
+### Sprint 2 — Completed
 
-Implement:
+Preserve:
 
 - Meta Model API integration.
 - Structured findings using Pydantic.
@@ -180,9 +180,22 @@ Implement:
 - Findings display in the existing frontend.
 - Automated tests with mocked model responses.
 
+### Sprint 3 — Active
+
+Implement:
+
+- Local stdio MCP server with the explicit `inspect_changes` tool.
+- Shared analysis orchestration for HTTP and MCP; preserve parser and evidence validation.
+- Read-only Git capture with explicit staged/unstaged scope, bounded time/output, and no untracked files.
+- Operator-configured authorized repositories; reject arbitrary paths from tool callers.
+- Conservative sensitive-path and secret filters before sending Git changes to Meta.
+- Structured hypotheses, structural evidence checks, suggested tests, and recoverable errors.
+- Automated tests with mocked Git/provider calls and local MCP protocol verification.
+- Verified Codex and Claude Code configuration examples in README.
+
 Do not implement yet:
 
-- MCP server.
+- Automatic hooks.
 - Agent Skills.
 - Automatic Git monitoring.
 - Test execution by the auditor.

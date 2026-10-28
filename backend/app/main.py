@@ -6,9 +6,9 @@ from fastapi.responses import JSONResponse
 
 from app.analysis_models import AnalysisResponse
 from app.models import ErrorResponse, HealthResponse, ParseRequest, ParseResponse
+from app.services.analysis import analyze_parsed
 from app.services.diff_parser import DiffParseError, parse_diff
-from app.services.model_client import MODEL, AnalysisError, review_diff
-from app.services.reference_validator import check_findings
+from app.services.model_client import AnalysisError
 
 app = FastAPI(title="AI Change Inspector", version="0.2.0")
 
@@ -65,11 +65,4 @@ def parse(request: ParseRequest) -> ParseResponse:
     responses={code: {"model": ErrorResponse} for code in (413, 422, 502, 503, 504)},
 )
 def analyze(request: ParseRequest) -> AnalysisResponse:
-    parsed = parse_diff(request.diff)
-    review = review_diff(parsed)
-    return AnalysisResponse(
-        model=MODEL,
-        summary=review.summary,
-        findings=check_findings(parsed, review),
-        parsed_diff=ParseResponse.model_validate(asdict(parsed)),
-    )
+    return analyze_parsed(parse_diff(request.diff))
