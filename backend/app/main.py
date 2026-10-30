@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 
 from fastapi import FastAPI, Request
@@ -5,12 +6,37 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.analysis_models import AnalysisResponse
+from app.inspection_models import InspectionError
+from app.local_access import LocalAccessMiddleware
 from app.models import ErrorResponse, HealthResponse, ParseRequest, ParseResponse
+from app.review_api import get_review_repository
+from app.review_api import router as review_router
+from app.review_models import ReviewError
 from app.services.analysis import analyze_parsed
 from app.services.diff_parser import DiffParseError, parse_diff
 from app.services.model_client import AnalysisError
 
-app = FastAPI(title="AI Change Inspector", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    get_review_repository().recover_interrupted()
+    yield
+
+
+app = FastAPI(title="AI Change Inspector", version="0.5.0", lifespan=lifespan)
+app.add_middleware(LocalAccessMiddleware)
+app.include_router(review_router)
+
+
+@app.exception_handler(ReviewError)
+@app.exception_handler(InspectionError)
+async def review_error_handler(
+    _request: Request, exc: ReviewError | InspectionError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code if isinstance(exc, ReviewError) else 403,
+        content={"error": {"code": exc.code, "message": str(exc), "line": None}},
+    )
 
 
 @app.exception_handler(AnalysisError)
@@ -40,7 +66,9 @@ async def validation_error_handler(_request: Request, _exc: RequestValidationErr
         content={
             "error": {
                 "code": "invalid_request",
-                "message": "Expected JSON with a string 'diff' only.",
+                "message": "Solicitud de revisión no válida."
+                if _request.url.path.startswith("/api/reviews")
+                else "Expected JSON with a string 'diff' only.",
                 "line": None,
             },
         },

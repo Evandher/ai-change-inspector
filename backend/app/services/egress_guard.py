@@ -10,6 +10,7 @@ from app.services.diff_parser import ParsedDiff
 SENSITIVE_PARTS = frozenset(
     {
         ".git",
+        ".local",
         ".aws",
         ".ssh",
         ".gnupg",
@@ -62,6 +63,7 @@ def check_egress(root: Path, text: str, parsed: ParsedDiff) -> None:
             if (
                 any(part in SENSITIVE_PARTS or part.startswith(".env") for part in parts)
                 or path.suffix.casefold() in SENSITIVE_SUFFIXES
+                or any(re.search(r"\.(?:db|sqlite3?)(?:-|$)", part) for part in parts)
                 or any(
                     re.match(r"(?:credentials|secrets|passwords|tokens)[._-]", part)
                     for part in parts

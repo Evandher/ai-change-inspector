@@ -9,8 +9,8 @@ it('shows rename, binary and metadata-only changes without fabricated lines', ()
     { ...base, file_id: 'binary', old_path: 'old.png', new_path: 'new.png', change_type: 'renamed', is_binary: true, hunks: [], metadata: ['rename from old.png', 'rename to new.png'] },
     { ...base, file_id: 'mode', hunks: [], metadata: ['old mode 100644', 'new mode 100755'] },
   ] }} />)
-  expect(screen.getByText('Desde old.png')).toBeInTheDocument()
-  expect(screen.getByText(/Archivo binario/)).toBeInTheDocument()
-  expect(screen.getByText(/Cambio de metadatos sin líneas/)).toBeInTheDocument()
+  expect(screen.getByText('From old.png')).toBeInTheDocument()
+  expect(screen.getByText(/Binary file/)).toBeInTheDocument()
+  expect(screen.getByText(/Metadata change with no modified lines/)).toBeInTheDocument()
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
 })

@@ -12,6 +12,9 @@ from tests.test_parser import SIMPLE
     "name",
     [
         ".env",
+        ".local/reviews.sqlite3",
+        "private.sqlite3",
+        "private.db-journal",
         ".env.example",
         "config/.env.production",
         ".aws/credentials",

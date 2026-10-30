@@ -1,3 +1,4 @@
+import { DisplayError } from './errors'
 import type { ParsedDiff } from '../types/diff'
 import type { AnalysisResponse } from '../types/analysis'
 
@@ -12,20 +13,19 @@ async function requestDiff<T>(endpoint: string, diff: string): Promise<T> {
       body: JSON.stringify({ diff }),
     })
   } catch {
-    throw new Error('No se pudo conectar con el backend. Comprueba que esté iniciado en el puerto 8000.')
+    throw new DisplayError('connection')
   }
   if (!response.ok) {
     const body = await response.json().catch(() => null)
-    if (body?.error && typeof body.error.message === 'string') {
-      const location = typeof body.error.line === 'number' ? ` Línea ${body.error.line}.` : ''
-      throw new Error(`${body.error.message}${location}`)
+    if (typeof body?.error?.code === 'string') {
+      throw new DisplayError(body.error.code, typeof body.error.line === 'number' ? body.error.line : undefined)
     }
-    throw new Error(`El backend respondió con HTTP ${response.status}. Comprueba que esté iniciado en el puerto 8000.`)
+    throw new DisplayError('httpError', undefined, response.status)
   }
   try {
     return await response.json() as T
   } catch {
-    throw new Error('El backend devolvió una respuesta JSON inválida.')
+    throw new DisplayError('invalidJson')
   }
 }
 

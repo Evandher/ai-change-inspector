@@ -11,4 +11,9 @@ coverage/
 .env.*
 !.env.example
 *.local
+.local/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 AGENTS.md

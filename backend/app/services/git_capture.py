@@ -13,6 +13,13 @@ from app.services.diff_parser import MAX_DIFF_BYTES
 
 GIT_TIMEOUT_SECONDS = 10.0
 CONFIG_LIMIT_BYTES = 64 * 1024
+EOL_CONFIG_QUERY = [
+    "config",
+    "--no-includes",
+    "--null",
+    "--get-regexp",
+    r"^core\.(autocrlf|eol|safecrlf)$",
+]
 # Reject includes before invoking any diff: otherwise a clean filter from an included
 # config could execute repository commands even with --no-ext-diff/--no-textconv.
 UNSAFE_CONFIG = (
@@ -48,7 +55,7 @@ def authorize_repositories(entries: list[str]) -> dict[str, AuthorizedRepository
     return repositories
 
 
-def _git_environment() -> dict[str, str]:
+def _git_environment(*, read_eol_config: bool = False) -> dict[str, str]:
     # Do not inherit MODEL_API_KEY, Git redirects, config injections, credentials,
     # external diff programs or other arbitrary agent environment variables.
     environment = {
@@ -78,10 +85,22 @@ def _git_environment() -> dict[str, str]:
             "LC_ALL": "C",
         }
     )
+    if read_eol_config:
+        # Only the fixed config query may read normal system/user config, never a diff.
+        # Includes remain disabled; no caller-provided GIT_* overrides are inherited.
+        for key in ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL"):
+            environment.pop(key)
+        for key in ("HOME", "USERPROFILE", "XDG_CONFIG_HOME"):
+            if key in os.environ:
+                environment[key] = os.environ[key]
     return environment
 
 
-def _run_git(root: Path, arguments: list[str], limit: int) -> tuple[int, bytes]:
+def _run_git(
+    root: Path, arguments: list[str], limit: int, *, read_eol_config: bool = False
+) -> tuple[int, bytes]:
+    if read_eol_config and arguments != EOL_CONFIG_QUERY:
+        raise ValueError("Only the fixed EOL config query may read user/system configuration.")
     executable = shutil.which("git")
     if executable is None:
         raise InspectionError("git_unavailable", "Git no está disponible en PATH.")
@@ -115,10 +134,12 @@ def _run_git(root: Path, arguments: list[str], limit: int) -> tuple[int, bytes]:
         with subprocess.Popen(
             command,
             cwd=root,
-            env=_git_environment(),
+            env=_git_environment(read_eol_config=read_eol_config),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            # Warnings (e.g. CRLF conversion) are not diff data. Errors use exit codes
+            # and sanitized messages; never retain potentially sensitive diagnostics.
+            stderr=subprocess.DEVNULL,
             shell=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ) as process:
@@ -185,6 +206,48 @@ def _check_layout(root: Path) -> None:
         raise InspectionError("invalid_repository", "No se pudo validar el repositorio.") from exc
 
 
+def _eol_options(root: Path) -> list[str]:
+    code, output = _run_git(root, EOL_CONFIG_QUERY, CONFIG_LIMIT_BYTES, read_eol_config=True)
+    if code == 1 and not output:
+        return []
+    if code != 0:
+        raise InspectionError("git_error", "No se pudo leer la configuración de finales de línea.")
+    booleans = {
+        "": "false",
+        "true": "true",
+        "yes": "true",
+        "on": "true",
+        "1": "true",
+        "false": "false",
+        "no": "false",
+        "off": "false",
+        "0": "false",
+    }
+    allowed = {
+        "core.autocrlf": {**booleans, "input": "input"},
+        "core.eol": {value: value for value in ("lf", "crlf", "native")},
+        "core.safecrlf": {**booleans, "warn": "warn"},
+    }
+    values: dict[str, str] = {}
+    try:
+        if not output.endswith(b"\0"):
+            raise ValueError("Incomplete configuration")
+        for entry in output[:-1].decode("utf-8").split("\0"):
+            key, separator, value = entry.partition("\n")
+            if not separator:
+                value = "true"  # Git boolean variable without '='.
+            if key in ("core.autocrlf", "core.safecrlf") and re.fullmatch(r"[+-]?\d+", value):
+                value = "true" if value.lstrip("+-").strip("0") else "false"
+            values[key] = allowed[key][value.casefold()]
+    except (UnicodeDecodeError, ValueError, KeyError) as exc:
+        raise InspectionError(
+            "unsupported_eol_config",
+            "La configuración de finales de línea contiene valores no admitidos.",
+        ) from exc
+    # Git emits scopes in precedence order; last value wins, including local overrides.
+    return [argument for key, value in values.items() for argument in ("-c", f"{key}={value}")]
+
+
 def capture_changes(repository: AuthorizedRepository, scope: ChangeScope) -> str:
     if scope not in ("staged", "unstaged"):
         raise InspectionError("invalid_scope", "Selecciona staged o unstaged explícitamente.")
@@ -224,7 +287,8 @@ def capture_changes(repository: AuthorizedRepository, scope: ChangeScope) -> str
     ]
     if scope == "staged":
         arguments.append("--cached")
-    code, output = _run_git(root, [*arguments, "--"], MAX_DIFF_BYTES)
+    eol_options = _eol_options(root) if scope == "unstaged" else []
+    code, output = _run_git(root, [*eol_options, *arguments, "--"], MAX_DIFF_BYTES)
     if code != 0:
         raise InspectionError("git_error", "Git no pudo capturar los cambios seleccionados.")
     try:

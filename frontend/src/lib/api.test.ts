@@ -10,5 +10,5 @@ it('handles proxy failures that are not JSON', async () => {
 
 it('handles malformed successful JSON', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('not JSON')))
-  await expect(parseDiff('diff')).rejects.toThrow('JSON inválida')
+  await expect(parseDiff('diff')).rejects.toThrow('invalid JSON')
 })

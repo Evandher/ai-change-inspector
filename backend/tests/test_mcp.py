@@ -3,13 +3,17 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock
 
+import httpx2
 import pytest
+from fastapi.testclient import TestClient
 from mcp import Client
 from mcp.client.stdio import StdioServerParameters
 
 from app import mcp_server
 from app.inspection_models import InspectionError
+from app.main import app
 from app.mcp_server import create_server, inspect_repository, load_key_file
+from app.services import inbox_client
 from app.services.diff_parser import DiffParseError
 from app.services.git_capture import AuthorizedRepository
 from tests import test_analysis
@@ -25,10 +29,34 @@ def repositories(tmp_path):
 
 
 @pytest.fixture
-def captured(monkeypatch):
+def captured(monkeypatch, repositories):
     capture = Mock(return_value=SIMPLE)
     monkeypatch.setattr(mcp_server, "capture_changes", capture)
-    return capture
+    monkeypatch.setenv(
+        "INSPECTOR_REPOSITORIES",
+        json.dumps({key: str(repo.root) for key, repo in repositories.items()}),
+    )
+    original = httpx2.Client
+    with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50000)) as api:
+
+        def handle(request):
+            response = api.request(
+                request.method,
+                str(request.url),
+                content=request.content,
+                headers=dict(request.headers),
+            )
+            return httpx2.Response(response.status_code, content=response.content)
+
+        monkeypatch.setattr(
+            inbox_client,
+            "HttpClient",
+            lambda **options: original(
+                **options,
+                transport=httpx2.MockTransport(handle),
+            ),
+        )
+        yield capture
 
 
 def test_unauthorized_id_never_reads_git_or_calls_provider(repositories, captured):
@@ -56,6 +84,8 @@ def test_complete_mcp_audit_reuses_sdk_and_backend_checks(repositories, captured
     assert result.analysis.findings[0].reference_checks[0].reason == "matched"
     assert result.analysis.findings[0].hypothesis.suggested_tests
     assert len(calls) == 1
+    assert result.registration_confirmed and result.review_id
+    assert result.review_url.endswith(f"/reviews/{result.review_id}")
     captured.assert_called_once_with(repositories["project"], "unstaged")
 
 
@@ -113,6 +143,11 @@ def test_provider_failure_is_structured(repositories, captured, mock_meta):
     assert result.error.recoverable and result.analysis is None
     assert "do-not-expose" not in result.model_dump_json()
     assert len(calls) == 1
+    from app.review_api import get_review_repository
+
+    stored = get_review_repository().get(result.review_id)
+    assert stored.diff == SIMPLE and stored.status == "error"
+    assert result.registration_confirmed and result.analysis_status == "error"
 
 
 def test_oversized_analysis_is_recoverable_without_meta(repositories, captured, mock_meta):
@@ -128,6 +163,66 @@ def test_unexpected_error_does_not_expose_internal_details(repositories, capture
     result = inspect_repository(repositories, "project", "unstaged")
     assert result.error.code == "inspection_failed"
     assert "private-internal-value" not in result.model_dump_json()
+
+
+def test_mcp_reports_web_offline_without_losing_failure_information(
+    repositories,
+    captured,
+    monkeypatch,
+    mock_meta,
+):
+    original = httpx2.Client
+
+    def offline(request):
+        raise httpx2.ConnectError("offline", request=request)
+
+    monkeypatch.setattr(
+        inbox_client,
+        "HttpClient",
+        lambda **options: original(
+            **options,
+            transport=httpx2.MockTransport(offline),
+        ),
+    )
+    result = inspect_repository(repositories, "project", "unstaged")
+    assert result.status == "error" and result.error.code == "web_service_unavailable"
+    assert not result.registration_confirmed and result.review_id and result.review_url
+    assert result.analysis is None and mock_meta[1] == []
+
+
+def test_lost_registration_response_still_has_a_durable_snapshot(
+    repositories,
+    captured,
+    monkeypatch,
+    mock_meta,
+):
+    original = httpx2.Client
+
+    def lose_response(request):
+        with TestClient(app, base_url="http://127.0.0.1:8000", client=("127.0.0.1", 50001)) as api:
+            assert (
+                api.post(
+                    str(request.url), content=request.content, headers=dict(request.headers)
+                ).status_code
+                == 201
+            )
+        raise httpx2.ReadTimeout("response lost", request=request)
+
+    monkeypatch.setattr(
+        inbox_client,
+        "HttpClient",
+        lambda **options: original(
+            **options,
+            transport=httpx2.MockTransport(lose_response),
+        ),
+    )
+    result = inspect_repository(repositories, "project", "unstaged")
+    assert result.status == "error" and not result.registration_confirmed
+    from app.review_api import get_review_repository
+
+    stored = get_review_repository().get(result.review_id)
+    assert stored.diff == SIMPLE and stored.status == "pending"
+    assert mock_meta[1] == []
 
 
 def test_key_file_only_loads_key_without_variable_expansion(tmp_path, monkeypatch):
@@ -162,12 +257,12 @@ async def test_mcp_tool_discovery_structured_output_and_explicit_scope(
 ):
     async with Client(create_server(repositories), raise_exceptions=True) as client:
         tools = (await client.list_tools()).tools
-        assert [tool.name for tool in tools] == ["inspect_changes"]
-        tool = tools[0]
+        assert {tool.name for tool in tools} == {"inspect_changes", "get_review_feedback"}
+        tool = next(tool for tool in tools if tool.name == "inspect_changes")
         assert set(tool.input_schema["required"]) == {"repository", "scope"}
         assert tool.input_schema["properties"]["scope"]["enum"] == ["staged", "unstaged"]
         assert tool.output_schema is not None
-        assert tool.annotations.read_only_hint is True
+        assert tool.annotations.read_only_hint is False
         assert tool.annotations.idempotent_hint is False
         result = await client.call_tool(
             "inspect_changes", {"repository": "project", "scope": "unstaged"}
@@ -198,7 +293,7 @@ async def test_real_stdio_protocol_from_an_unrelated_working_directory(tmp_path,
     )
     async with Client(parameters, read_timeout_seconds=20, mode=mode) as client:
         tools = (await client.list_tools()).tools
-        assert [tool.name for tool in tools] == ["inspect_changes"]
+        assert {tool.name for tool in tools} == {"inspect_changes", "get_review_feedback"}
         result = await client.call_tool(
             "inspect_changes", {"repository": "unknown", "scope": "unstaged"}
         )

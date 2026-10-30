@@ -27,8 +27,11 @@ def git_mock(monkeypatch):
     calls = []
 
     def install(diff=None, *, config_code=1, config=b"", state=b"true\nfalse\n", diff_code=0):
-        def run(root, arguments, limit):
+        def run(root, arguments, limit, **options):
             calls.append((root, arguments, limit))
+            if arguments == git_capture.EOL_CONFIG_QUERY:
+                assert options == {"read_eol_config": True}
+                return 1, b""
             if arguments[0] == "config":
                 return config_code, config
             if arguments[0] == "rev-parse":
@@ -60,7 +63,7 @@ def test_authorization_requires_explicit_absolute_roots(tmp_path):
 def test_capture_selects_one_scope_and_fixed_safe_options(authorized, git_mock, scope):
     _, calls = git_mock
     assert capture_changes(authorized, scope) == SIMPLE
-    assert len(calls) == 3
+    assert len(calls) == (4 if scope == "unstaged" else 3)
     root, arguments, limit = calls[-1]
     assert root == authorized.root
     assert ("--cached" in arguments) == (scope == "staged")
@@ -176,6 +179,7 @@ def test_runner_bounds_output_and_never_uses_a_shell(monkeypatch, tmp_path):
     _, options = factory.call_args
     assert options["shell"] is False
     assert options["stdin"] == subprocess.DEVNULL
+    assert options["stderr"] == subprocess.DEVNULL
     assert not {"MODEL_API_KEY", "GIT_DIR", "GIT_CONFIG_COUNT"} & options["env"].keys()
     assert options["env"]["GIT_OPTIONAL_LOCKS"] == "0"
     assert options["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
@@ -228,3 +232,129 @@ def test_git_executable_inside_repository_is_never_run(monkeypatch, tmp_path):
         git_capture._run_git(tmp_path, ["diff", "--"], 64)
     assert exc.value.code == "unsafe_git_executable"
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("global_setting", "local_setting", "ending", "attributes"),
+    [
+        ("true", "", b"\r\n", ""),
+        ("false", "", b"\n", ""),
+        ("input", "", b"\r\n", ""),
+        ("true", "autocrlf = false", b"\r\n", ""),
+        ("false", "autocrlf = true", b"\r\n", ""),
+        ("true", "autocrlf = input", b"\n", ""),
+        ("false", "eol = crlf\n safecrlf = warn", b"\r\n", "text eol=crlf"),
+        ("true", "eol = lf", b"\n", "text eol=lf"),
+        ("true", "", b"\r\n", "-text"),
+    ],
+)
+def test_real_git_eol_matches_normal_diff(
+    tmp_path, monkeypatch, global_setting, local_setting, ending, attributes
+):
+    source = Path(__file__).resolve().parents[2]
+    if not (source / ".git").is_dir() or git_capture.shutil.which("git") is None:
+        pytest.skip("Requires Git and a source checkout to clone without staging or commits")
+    root = tmp_path / "repo"
+    home = tmp_path / "profile"
+    home.mkdir()
+    global_config = home / ".gitconfig"
+    global_config.write_text(f"[core]\n autocrlf = {global_setting}\n", encoding="utf-8")
+    for key in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(key, str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "xdg"))
+    # Isolate tests from the installed system policy without altering it on disk.
+    original_environment = git_capture._git_environment
+
+    def environment(**options):
+        value = original_environment(**options)
+        value["GIT_CONFIG_NOSYSTEM"] = "1"
+        return value
+
+    monkeypatch.setattr(git_capture, "_git_environment", environment)
+
+    def git(*arguments):
+        return subprocess.run(
+            ["git", "--no-optional-locks", *arguments],
+            env=environment(read_eol_config=True),
+            check=True,
+            capture_output=True,
+            timeout=30,
+        ).stdout
+
+    git("-c", "core.autocrlf=false", "clone", "--local", "--no-hardlinks", str(source), str(root))
+    if local_setting:
+        with (root / ".git/config").open("a", encoding="utf-8") as config:
+            config.write(f"\n[core]\n {local_setting}\n")
+    if attributes:
+        (root / ".git/info/attributes").write_text(
+            f"backend/app/models.py {attributes}\n", encoding="utf-8"
+        )
+    target = root / "backend/app/models.py"
+    content = target.read_bytes().replace(b"\r\n", b"\n")
+    target.write_bytes(content.replace(b"\n", ending) + ending + b"# EOL fixture" + ending)
+    protected = [target, root / ".git/index", root / ".git/config", global_config]
+    before = [path.read_bytes() for path in protected]
+    arguments = [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--ignore-submodules=all",
+        "--no-renames",
+        "--no-color",
+        "--no-relative",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        "--unified=3",
+        "--",
+    ]
+    normal = git("-C", str(root), *arguments)
+    isolated = capture_changes(AuthorizedRepository("eol", root.resolve()), "unstaged")
+    assert isolated.encode() == normal
+    assert "# EOL fixture" in isolated
+    if global_setting == "true" and not local_setting and not attributes:
+        assert isolated.count("\n-") == 1  # Only the --- header; no false deletions.
+    assert [path.read_bytes() for path in protected] == before
+
+
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        (b"core.autocrlf\ntrue\0core.autocrlf\nfalse\0", ["-c", "core.autocrlf=false"]),
+        (b"core.safecrlf\nWARN\0", ["-c", "core.safecrlf=warn"]),
+        (b"core.autocrlf\nyes\0", ["-c", "core.autocrlf=true"]),
+        (b"core.autocrlf\0", ["-c", "core.autocrlf=true"]),
+        (b"core.autocrlf\n\0", ["-c", "core.autocrlf=false"]),
+        (b"core.autocrlf\n2\0", ["-c", "core.autocrlf=true"]),
+    ],
+)
+def test_eol_allowlist_and_last_value_precedence(monkeypatch, tmp_path, output, expected):
+    monkeypatch.setattr(git_capture, "_run_git", lambda *args, **kwargs: (0, output))
+    assert git_capture._eol_options(tmp_path) == expected
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        b"core.autocrlf\nexecute-this\0",
+        b"filter.x.clean\nrun\0",
+        b"core.eol\nlf",
+        b"core.eol\n\xff\0",
+    ],
+)
+def test_invalid_eol_settings_fail_closed(monkeypatch, tmp_path, output):
+    monkeypatch.setattr(git_capture, "_run_git", lambda *args, **kwargs: (0, output))
+    with pytest.raises(InspectionError) as exc:
+        git_capture._eol_options(tmp_path)
+    assert exc.value.code == "unsupported_eol_config"
+
+
+def test_user_configuration_only_available_to_fixed_read_query(monkeypatch, tmp_path):
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "attacker-config")
+    normal = git_capture._git_environment()
+    reader = git_capture._git_environment(read_eol_config=True)
+    assert normal["GIT_CONFIG_GLOBAL"] == git_capture.os.devnull
+    assert "GIT_CONFIG_GLOBAL" not in reader
+    assert "GIT_CONFIG_COUNT" not in reader
+    assert "MODEL_API_KEY" not in reader
+    with pytest.raises(ValueError):
+        git_capture._run_git(tmp_path, ["diff"], 100, read_eol_config=True)

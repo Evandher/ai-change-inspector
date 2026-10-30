@@ -30,9 +30,14 @@ class InspectionAnalysis(BaseModel):
 
 class InspectionResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    status: Literal["completed", "no_changes", "blocked", "error"]
+    status: Literal["completed", "no_changes", "blocked", "error", "pending", "analyzing"]
     repository: str
     scope: ChangeScope
     untracked_policy: Literal["excluded"] = "excluded"
     analysis: InspectionAnalysis | None = None
     error: RecoverableError | None = None
+    review_id: str | None = None
+    review_url: str | None = None
+    registration_confirmed: bool = False
+    analysis_status: Literal["pending", "analyzing", "completed", "error"] | None = None
+    parent_review_id: str | None = None

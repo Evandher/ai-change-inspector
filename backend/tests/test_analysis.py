@@ -344,7 +344,9 @@ def anyio_backend():
 async def test_api_full_pipeline_with_sdk_mock(mock_meta):
     install, calls, _ = mock_meta
     install(envelope(review_body([reference_for(), reference_for(path="invented.py")])))
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as client:
         response = await client.post("/api/diff/analyze", json={"diff": SIMPLE})
     assert response.status_code == 200
     body = response.json()
@@ -360,7 +362,9 @@ async def test_api_full_pipeline_with_sdk_mock(mock_meta):
 @pytest.mark.anyio
 async def test_api_invalid_diff_does_not_call_model(mock_meta):
     _, calls, _ = mock_meta
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as client:
         for text in ("garbage", "x" * (1024 * 1024 + 1)):
             response = await client.post("/api/diff/analyze", json={"diff": text})
             assert response.status_code == 422
@@ -375,7 +379,9 @@ async def test_api_empty_findings_and_configuration_errors(mock_meta, monkeypatc
             {"summary": "No se identificaron riesgos con el contexto disponible.", "findings": []}
         )
     )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as client:
         response = await client.post("/api/diff/analyze", json={"diff": SIMPLE})
         assert response.status_code == 200 and response.json()["findings"] == []
         monkeypatch.delenv("MODEL_API_KEY")
@@ -388,9 +394,26 @@ async def test_api_empty_findings_and_configuration_errors(mock_meta, monkeypatc
 async def test_api_provider_errors_follow_error_contract(mock_meta):
     install, _, _ = mock_meta
     install({"error": {"message": "private-key", "type": "error"}}, status=429)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as client:
         response = await client.post("/api/diff/analyze", json={"diff": SIMPLE})
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "model_rate_limited"
     assert response.json()["error"]["line"] is None
     assert "private-key" not in response.text
+
+
+def test_report_prompt_requests_english_without_translating_evidence(mock_meta):
+    _, calls, _ = mock_meta
+    result = review_diff(parse_diff(SIMPLE))
+    request = json.loads(calls[0].content)
+    assert (
+        "Write summaries, finding titles, explanations and suggested tests in English."
+        in request["instructions"]
+    )
+    assert "never translate code or references" in request["instructions"]
+    assert "Responde en español" not in request["instructions"]
+    assert request["text"]["format"]["schema"] == ModelReview.model_json_schema()
+    assert result.findings[0].references[0].quote == "new"
+    assert result.summary == review_body()["summary"]  # Do not rewrite provider/historical text.
