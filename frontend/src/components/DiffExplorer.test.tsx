@@ -13,4 +13,12 @@ it('shows rename, binary and metadata-only changes without fabricated lines', ()
   expect(screen.getByText(/Binary file/)).toBeInTheDocument()
   expect(screen.getByText(/Metadata change with no modified lines/)).toBeInTheDocument()
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  expect(screen.getByRole('navigation', { name: 'Diff files' })).toBeInTheDocument()
+})
+
+it('keeps a single file directly visible without a redundant file navigation row', () => {
+  render(<DiffExplorer result={parsedFixture} />)
+  expect(screen.getByRole('heading', { name: 'a.txt' })).toBeInTheDocument()
+  expect(screen.getByRole('table')).toBeInTheDocument()
+  expect(screen.queryByRole('navigation', { name: 'Diff files' })).not.toBeInTheDocument()
 })

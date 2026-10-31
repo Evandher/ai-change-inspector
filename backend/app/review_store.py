@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+from collections import deque
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +12,18 @@ from app.analysis_models import AnalysisResponse
 from app.feedback_models import FeedbackWrite, HumanFeedback, ReviewFeedback
 from app.inspection_models import RecoverableError
 from app.models import ParseResponse
-from app.review_models import ReviewCreate, ReviewDetail, ReviewError, ReviewPage, ReviewSummary
+from app.review_models import (
+    ReviewComparison,
+    ReviewCreate,
+    ReviewDetail,
+    ReviewError,
+    ReviewPage,
+    ReviewSummary,
+    ReviewTimeline,
+    TimelineItem,
+)
+
+TIMELINE_LIMIT = 200
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reviews (
@@ -35,6 +47,7 @@ CREATE TABLE IF NOT EXISTS review_links (
     parent_id TEXT NOT NULL REFERENCES reviews(review_id),
     CHECK(child_id != parent_id)
 );
+CREATE INDEX IF NOT EXISTS review_links_parent_idx ON review_links(parent_id);
 CREATE TRIGGER IF NOT EXISTS immutable_link_update BEFORE UPDATE ON review_links
 BEGIN SELECT RAISE(ABORT, 'immutable link'); END;
 CREATE TRIGGER IF NOT EXISTS immutable_link_delete BEFORE DELETE ON review_links
@@ -270,6 +283,104 @@ class ReviewRepository:
                 (review_id,),
             ).rowcount
         return changed == 1
+
+    def timeline(self, review_id: str) -> ReviewTimeline:
+        columns = (
+            "review_id,repository,repository_root,origin,scope,created_at,finished_at,"
+            "status,diff_sha256,error_json"
+        )
+        items: list[TimelineItem] = []
+        missing: list[str] = []
+        incomplete = truncated = False
+        with self.connection() as connection:
+            connection.execute("BEGIN")
+            anchor = connection.execute(
+                f"SELECT {columns} FROM reviews WHERE review_id=?", (review_id,)
+            ).fetchone()
+            if anchor is None:
+                raise ReviewError("review_not_found", "Review does not exist.", 404)
+            queue = deque([review_id])
+            scheduled = {review_id}
+            while queue:
+                identifier = queue.popleft()
+                row = connection.execute(
+                    f"SELECT {columns} FROM reviews WHERE review_id=?", (identifier,)
+                ).fetchone()
+                if row is None:
+                    missing.append(identifier)
+                    incomplete = True
+                    continue
+                if (row["repository"], row["repository_root"]) != (
+                    anchor["repository"],
+                    anchor["repository_root"],
+                ):
+                    incomplete = True
+                    continue  # Do not traverse or disclose another repository's metadata.
+                parent = connection.execute(
+                    "SELECT parent_id FROM review_links WHERE child_id=?", (identifier,)
+                ).fetchone()
+                items.append(
+                    TimelineItem(
+                        **self._summary(row), parent_review_id=parent[0] if parent else None
+                    )
+                )
+                neighbors = connection.execute(
+                    "SELECT parent_id AS id FROM review_links WHERE child_id=? "
+                    "UNION SELECT child_id AS id FROM review_links WHERE parent_id=? LIMIT ?",
+                    (identifier, identifier, TIMELINE_LIMIT + 1),
+                ).fetchall()
+                if len(neighbors) > TIMELINE_LIMIT:
+                    truncated = True
+                for neighbor in neighbors:
+                    if neighbor[0] not in scheduled:
+                        if len(scheduled) >= TIMELINE_LIMIT:
+                            truncated = True
+                        else:
+                            scheduled.add(neighbor[0])
+                            queue.append(neighbor[0])
+        parents = {item.review_id: item.parent_review_id for item in items}
+        for item in items:
+            seen = set()
+            current = item.review_id
+            while current in parents:
+                if current in seen:
+                    incomplete = True
+                    break
+                seen.add(current)
+                current = parents[current]
+        # IDs that were not returned remain explicit references, never invented snapshots.
+        items.sort(key=lambda item: (item.created_at, item.review_id))
+        return ReviewTimeline(
+            review_id=review_id,
+            repository=anchor["repository"],
+            repository_root=anchor["repository_root"],
+            items=items,
+            missing_review_ids=sorted(missing),
+            incomplete=incomplete,
+            truncated=truncated,
+        )
+
+    def compare(self, review_id: str, other_id: str) -> ReviewComparison:
+        first, second = self.get(review_id), self.get(other_id)
+        if review_id == other_id or (first.repository, first.repository_root) != (
+            second.repository,
+            second.repository_root,
+        ):
+            raise ReviewError(
+                "comparison_not_related", "Select a parent and its direct child.", 409
+            )
+        with self.connection() as connection:
+            link = connection.execute(
+                "SELECT parent_id,child_id FROM review_links "
+                "WHERE (parent_id=? AND child_id=?) OR (parent_id=? AND child_id=?)",
+                (review_id, other_id, other_id, review_id),
+            ).fetchone()
+        if link is None:
+            raise ReviewError(
+                "comparison_not_related", "Select a parent and its direct child.", 409
+            )
+        parent, child = (first, second) if link[0] == review_id else (second, first)
+        return ReviewComparison(parent=parent, child=child)
 
     def finish(
         self, review_id: str, analysis: AnalysisResponse | None, error: RecoverableError | None

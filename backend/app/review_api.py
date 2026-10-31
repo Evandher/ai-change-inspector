@@ -9,7 +9,14 @@ from app.feedback_models import FeedbackWrite, HumanFeedback, ReviewFeedback
 from app.inspection_models import InspectionError, RecoverableError
 from app.local_settings import database_path, web_repositories, web_url
 from app.models import ParseResponse
-from app.review_models import ReviewCreate, ReviewDetail, ReviewError, ReviewPage
+from app.review_models import (
+    ReviewComparison,
+    ReviewCreate,
+    ReviewDetail,
+    ReviewError,
+    ReviewPage,
+    ReviewTimeline,
+)
 from app.review_store import ReviewRepository
 from app.services.analysis import analyze_parsed
 from app.services.diff_parser import DiffParseError, parse_diff
@@ -56,6 +63,20 @@ def list_reviews(
 @router.get("/{review_id}", response_model=ReviewDetail)
 def get_review(review_id: UUID4) -> ReviewDetail:
     return get_review_repository().get(str(review_id))
+
+
+@router.get("/{review_id}/timeline", response_model=ReviewTimeline)
+def get_timeline(review_id: UUID4) -> ReviewTimeline:
+    timeline = get_review_repository().timeline(str(review_id))
+    authorized_root(timeline.repository, timeline.repository_root)
+    return timeline
+
+
+@router.get("/{review_id}/compare/{other_id}", response_model=ReviewComparison)
+def compare_reviews(review_id: UUID4, other_id: UUID4) -> ReviewComparison:
+    result = get_review_repository().compare(str(review_id), str(other_id))
+    authorized_root(result.parent.repository, result.parent.repository_root)
+    return result
 
 
 @router.get("/{review_id}/feedback", response_model=ReviewFeedback)

@@ -8,6 +8,8 @@ Sprint 3 añade un MCP local por stdio; Sprint 4 incorpora **Agent Review Inbox*
 El agente registra una instantánea antes del análisis y el desarrollador abre su URL en la web.
 Sprint 5 añade decisiones humanas por hallazgo, consulta de feedback por MCP y enlaces entre entregas.
 Sprint 6 añade un Skill portable para el ciclo de auditoría y feedback.
+Sprint 7 añade timeline y comparación visual de instantáneas padre-hija, en modo lectura.
+Sprint 8 unifica el frontend con tema oscuro, sidebar colapsable y vistas centradas en el diff.
 No hay autenticación, colaboración, nube, hooks ni ejecución de código del diff.
 
 ## Requisitos
@@ -100,6 +102,68 @@ Los nombres españoles de botones usados en las instrucciones siguientes corresp
 | Review inbox | Revisiones recibidas |
 | Refresh review | Actualizar revisión |
 | Analyze pending snapshot | Analizar instantánea pendiente |
+
+## Sprint 8: interfaz y navegación
+
+El tema oscuro utiliza fondos carbón y superficies antracita. El celeste `#59C3FF` identifica
+acciones y selecciones; los colores de riesgo, atención, información y líneas del diff se
+definen por separado. Los tokens están en `frontend/src/index.css`, conectados a Tailwind;
+no se añaden dependencias, fuentes remotas ni servicios externos.
+
+La escala de lectura usa títulos de 34 px, texto principal de 15 px y un sidebar expandido de
+262 px. La composición sigue la maqueta HTML aprobada. Inbox agrupa repositorio, revisión e identificador con jerarquías distintas y presenta
+las rutas de detalle/evolución como acciones neutras. Con pocos registros conserva únicamente
+las filas reales, el total recibido y una nota de orientación; no rellena la tabla con datos ficticios.
+
+- La página inicial `/` es **Overview**. Consulta una sola vez `GET /api/reviews?limit=20&offset=0`,
+  sin sondeo ni análisis del modelo. Muestra el total persistido que devuelve la API, los estados
+  del último lote (hasta 20) y una tabla con hasta cinco revisiones recientes. Los contadores de
+  completadas, pendientes/en curso y errores **no son totales históricos**: su alcance se indica
+  expresamente. Un análisis completado no implica aprobación humana. No se inventan métricas
+  de hallazgos, tendencias ni gráficas con datos ausentes. Actualizar es una acción explícita.
+- El explorador manual está en `/diff` y el inbox en `/reviews`. Los enlaces MCP a revisiones
+  existentes no cambian. El sidebar enlaza a estas vistas y a **Overview**. En escritorio, el
+  botón de panel lo contrae/expande. La preferencia se guarda en `localStorage`, clave
+  `ai-change-inspector.sidebar-collapsed` (`true`/`false`); si el almacenamiento está bloqueado,
+  funciona durante la sesión. Hasta 900 px se usa una barra de iconos para reservar espacio.
+- Los iconos conservan nombres accesibles y tooltips al pasar el cursor o enfocar con teclado.
+  Escape oculta el tooltip. Hay enlace para saltar al contenido y foco visible.
+- Inbox muestra metadatos reales en una tabla con scroll propio, compartida con Overview;
+  conserva paginación, detalle, acceso a evolución y actualización explícita. No añade búsquedas ficticias.
+- En escritorio amplio, el detalle da prioridad al diff a la izquierda y muestra hipótesis,
+  citas, pruebas sugeridas y edición humana a la derecha. En pantallas menores, se apilan.
+  Las decisiones humanas se eligen con controles de radio accesibles; se guardan solo al pulsar
+  **Save decision**. Ruta y hash siguen disponibles al desplegar **Snapshot details**; el texto exacto del diff,
+  al final del detalle. Los enlaces de evidencia resaltan la línea sin alterar sus IDs.
+- Evolución presenta una secuencia horizontal compacta con selección activa y etiquetas de padre
+  para distinguir ramas; en móvil se apila. Debajo reutiliza la comparación del padre y la revisión
+  seleccionada; si esta es raíz, muestra su primer hijo según el orden del timeline. Solo consulta
+  una relación directa presente en el listado, mediante el endpoint de comparación existente.
+  Relaciones incompletas o errores se indican sin reconstruir contenido ni lanzar análisis.
+  Las conexiones representan el orden de presentación, no un gráfico de ascendencia.
+  La comparación mantiene dos columnas con scroll controlado,
+  evidencias separadas y contenido de solo lectura. Ausencia de hallazgos no demuestra corrección.
+
+EN sigue siendo el idioma inicial; el selector de la barra superior conserva EN/ES y no traduce
+informes guardados. Se respeta movimiento reducido. Los borradores de feedback mantienen el
+comportamiento anterior: no se guardan hasta pulsar el botón y se pierden al abandonar la vista.
+El rediseño no inicia auditorías, análisis ni llamadas a Meta al navegar.
+
+El refinamiento de interacción reduce la altura de las filas y da prioridad al repositorio;
+el UUID completo y el alcance siguen visibles como metadatos secundarios. Los hallazgos permiten
+desplegar explicación, evidencia y pruebas (el primero empieza abierto), sin ocultar ni desmontar
+el editor de feedback humano. Cerrar un hallazgo no descarta su borrador ni guarda una decisión.
+Las duraciones y curvas de movimiento están centralizadas: sidebar y desplazamiento del contenido
+200 ms, entrada de pantalla con opacidad y 4 px de desplazamiento durante 160 ms, y bloques
+del Overview con desfases de 30 ms. No se animan filas individuales ni se reinicia la entrada
+al actualizar datos existentes. Los hallazgos expanden/contraen su espacio mediante CSS Grid,
+con contenido siempre montado y `inert`/`aria-hidden` al cerrarse; conservan borradores y foco.
+Se desactiva todo movimiento con `prefers-reduced-motion: reduce`. No hay librerías de animación,
+temporizadores, esperas artificiales, sondeo ni peticiones al modelo asociadas a estas transiciones.
+
+El resaltado de sintaxis es exclusivamente visual, sin dependencias: reconoce tokens simples
+por extensión del archivo y no infiere gramáticas completas ni cadenas multilínea. Conserva el
+texto, espacios e IDs; no reemplaza el parser ni la validación de evidencias y no ejecuta código.
 
 ## Sprint 2: revisión con Muse Spark
 
@@ -236,7 +300,7 @@ SQLite usa la biblioteca estándar `sqlite3`, sin ORM ni nuevas dependencias. Ca
 El diff, IDs y metadatos de la instantánea no se actualizan: un trigger SQLite protege esos campos.
 El estado sigue `pending → analyzing → completed/error`; los estados terminales no se sobrescriben.
 La consulta del detalle no vuelve a leer Git ni inicia análisis. Las capturas posteriores son otras
-revisiones; no se implementa comparación visual ni resolución automática de hallazgos.
+revisiones; la comparación visual del Sprint 7 no implica resolución automática de hallazgos.
 Las decisiones humanas del Sprint 5 se guardan por separado.
 
 El registro se confirma en una transacción corta **antes** de llamar a Meta. No se mantiene una
@@ -384,7 +448,8 @@ inexistentes, autorreferencias, repositorios distintos y cambios del padre de un
 El hijo es una nueva instantánea con nuevo UUID; el padre puede tener varios hijos. Ninguna relación
 reanaliza ni modifica el resultado o las decisiones del padre. Los hallazgos del hijo empiezan sin
 decisiones: no se infiere que las solicitudes anteriores estén resueltas. El detalle muestra enlaces
-**Previous review / Revisión anterior** y **Follow-up review / Revisión posterior**, sin comparación.
+**Previous review / Revisión anterior** y **Follow-up review / Revisión posterior**;
+el Sprint 7 añade timeline y comparación padre-hija sin inferir resolución.
 
 ### API y límite de confianza humana
 
@@ -487,7 +552,9 @@ Tras trabajo autorizado, puedes pedir una auditoría posterior explícita:
 previous review REVIEW_ID using parent_review_id. Do not run fixes or tests.
 ```
 
-El vínculo no compara hallazgos ni demuestra resolución. MCP/API ausentes, fallos y estados pendientes
+El vínculo no compara semánticamente hallazgos ni demuestra resolución. La comparación visual está
+disponible desde View evolution en la web, no mediante una nueva herramienta MCP.
+MCP/API ausentes, fallos y estados pendientes
 se reportan y detienen el flujo. El Skill no accede directamente a SQLite/HTTP ni falsifica cabeceras
 para suplir herramientas o escribir feedback humano. Tampoco crea hooks, notificaciones o bucles.
 
@@ -500,6 +567,75 @@ ni descubrimiento en una instalación real de Codex o Claude Code. La carga del 
 frente a errores/comentarios hostiles deben comprobarse también en los clientes tras instalarlo,
 preferentemente con el proveedor simulado. Sigue vigente el límite sin autenticación del Sprint 5:
 las instrucciones del Skill no son una barrera contra procesos locales con acceso arbitrario.
+
+## Sprint 7: Review Evolution
+
+Desde el detalle pulsa **View evolution / Ver evolución** para abrir
+`/reviews/{review_id}/evolution`. El timeline muestra la familia conectada por `parent_review_id`,
+ordenada por fecha UTC de creación (UUID como desempate). Incluye ancestros, descendientes y ramas;
+la etiqueta de padre identifica cada rama. Los enlaces de cada nodo abren su detalle guardado.
+Una revisión sin vínculos tiene un timeline de un solo nodo.
+
+Pulsa **Compare with parent / Comparar con la anterior** en un nodo que tenga padre disponible,
+o desde el detalle de la hija. La ruta `/reviews/{parent_id}/compare/{child_id}` presenta dos
+columnas, anterior y posterior, con desplazamiento horizontal en pantallas estrechas. Solo admite
+padre-hija directos, no hermanos, revisiones sin relación ni ancestro-nieto. El orden visual siempre
+es padre a la izquierda e hija a la derecha, aunque los parámetros de consulta estén invertidos.
+
+Cada columna muestra ID, fecha, alcance, estado, SHA-256, texto original registrado (solo lectura),
+el explorador existente y los hallazgos originales: severidad estimada, citas, validaciones
+estructurales y pruebas sugeridas sin ejecutar. El texto y las citas no se traducen al cambiar EN/ES.
+La API conserva el diff exacto y su SHA-256; el textarea HTML puede normalizar CRLF a LF solo
+para su presentación, como en el detalle existente, sin alterar lo almacenado.
+Las decisiones y comentarios humanos se muestran en un bloque identificado como humano y de solo
+lectura; la ausencia de decisión se indica como pendiente. Se consulta su estado guardado actual,
+no una versión histórica de comentarios. Para editar feedback, abre deliberadamente el detalle de
+esa revisión; no hay controles de edición en timeline/comparación.
+
+**La ausencia de un hallazgo en otra auditoría no demuestra una corrección.** No se alinean ni
+emparejan hallazgos entre revisiones, no se comparan semánticamente con un LLM y no se declara
+resolución. Se muestran cambios de evidencia capturada. Diferentes alcances staged/unstaged se
+indican explícitamente y no equivalen necesariamente a dos versiones completas del mismo archivo.
+Cada explorador representa el diff almacenado de esa captura, no un nuevo diff padre-contra-hija
+ni el contenido completo de archivos. La aplicación no consulta Git ni el filesystem auditado.
+
+La comparación conserva los IDs canónicos de archivo/hunk en los datos. Los IDs de elementos DOM
+y enlaces de evidencia llevan prefijos distintos por columna para que dos instantáneas idénticas
+no colisionen. El contenido del API y los identificadores deterministas del parser no cambian.
+
+### Consultas locales de solo lectura
+
+| Endpoint GET | Respuesta |
+| --- | --- |
+| `/api/reviews/{review_id}/timeline` | `review_id`, repositorio/raíz, `items` de metadatos con `parent_review_id`, `missing_review_ids`, `incomplete`, `truncated` |
+| `/api/reviews/{review_id}/compare/{other_id}` | `parent` y `child`, ambos con el mismo contrato completo del detalle existente |
+
+Ambas rutas mantienen controles de acceso loopback/Host/Origin y exigen que el repositorio siga
+actualmente autorizado por la API. La comparación exige el mismo ID y raíz autorizados y una arista
+padre-hija existente. UUID inválido: 422; revisión ausente: 404; pareja no directa: 409
+`comparison_not_related`; repositorio no autorizado: 403. Las consultas no modifican revisiones,
+vínculos ni feedback, no ejecutan código/pruebas ni solicitan análisis a Meta. No hay endpoints nuevos
+de escritura, nuevas tablas ni herramientas MCP. El servicio de análisis manual sigue disponible
+fuera de estas vistas, con sus acciones explícitas originales.
+Se añade únicamente un índice SQLite sobre el padre en `review_links` para consultar ramas
+sin recorrer toda la tabla por cada nodo; no reescribe instantáneas ni feedback.
+
+### Estados y límites
+
+- Sin hallazgos: se conserva la advertencia de que un resultado vacío no garantiza seguridad.
+- Pendiente o en curso: se muestra su estado y diff, sin iniciar análisis. Error del proveedor:
+  se conserva el mensaje/código localizado y la instantánea disponible.
+- Relaciones dañadas/incompletas: el timeline avisa y lista referencias ausentes sin inventar
+  snapshots. No recorre nodos de otro repositorio. Los ciclos se detectan y se advierten.
+- El recorrido está limitado a **200 IDs** por consulta, incluidos IDs ausentes; `truncated=true`
+  advierte si no se pudo recorrer todo. Las consultas de timeline solo leen metadatos, no todos los
+  diffs. Una familia muy grande puede requerir abrir el timeline desde otro nodo; no hay paginación
+  avanzada ni garantía de cobertura completa en ese caso.
+- Los datos se cargan al abrir/navegar. No hay polling: recarga la página para consultar estados
+  o comentarios posteriores. Cada GET de comparación reúne los detalles con las consultas existentes;
+  el feedback de ambas columnas no constituye una transacción histórica simultánea.
+- Las comprobaciones de SQLite/React usan proveedores simulados y verifican inmutabilidad, navegación,
+  EN/ES y ausencia de acciones de análisis/escritura. No acreditan que una hipótesis esté corregida.
 
 ## MCP local por stdio (Sprint 3, integrado con el inbox)
 

@@ -49,6 +49,25 @@ class ReviewPage(BaseModel):
     total: int
 
 
+class TimelineItem(ReviewSummary):
+    parent_review_id: str | None
+
+
+class ReviewTimeline(BaseModel):
+    review_id: str
+    repository: str
+    repository_root: str
+    items: list[TimelineItem]
+    missing_review_ids: list[str]
+    incomplete: bool
+    truncated: bool
+
+
+class ReviewComparison(BaseModel):
+    parent: ReviewDetail
+    child: ReviewDetail
+
+
 class ReviewError(Exception):
     def __init__(self, code: str, message: str, status_code: int = 503):
         super().__init__(message)

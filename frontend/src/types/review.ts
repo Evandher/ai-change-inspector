@@ -33,3 +33,15 @@ export interface HumanFeedback {
   comment: string
   updated_at: string | null
 }
+
+export interface TimelineItem extends ReviewSummary { parent_review_id: string | null }
+export interface ReviewTimeline {
+  review_id: string
+  repository: string
+  repository_root: string
+  items: TimelineItem[]
+  missing_review_ids: string[]
+  incomplete: boolean
+  truncated: boolean
+}
+export interface ReviewComparison { parent: ReviewDetail; child: ReviewDetail }

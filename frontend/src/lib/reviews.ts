@@ -1,5 +1,5 @@
 import { DisplayError } from './errors'
-import type { ReviewDetail, ReviewPage, HumanFeedback, Decision } from '../types/review'
+import type { ReviewDetail, ReviewPage, HumanFeedback, Decision, ReviewTimeline, ReviewComparison } from '../types/review'
 
 async function request<T>(url: string, method = 'GET', body: unknown = {}): Promise<T> {
   let response: Response
@@ -25,3 +25,6 @@ export const analyzeReview = (id: string) => request<ReviewDetail>(`/api/reviews
 
 export const saveFeedback = (id: string, index: number, data: { decision: Decision; comment: string }) =>
   request<HumanFeedback>(`/api/reviews/${encodeURIComponent(id)}/feedback/${index}`, 'PUT', data)
+
+export const getTimeline = (id: string) => request<ReviewTimeline>(`/api/reviews/${encodeURIComponent(id)}/timeline`)
+export const compareReviews = (id: string, otherId: string) => request<ReviewComparison>(`/api/reviews/${encodeURIComponent(id)}/compare/${encodeURIComponent(otherId)}`)
