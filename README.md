@@ -23,7 +23,7 @@ flowchart LR
 ```
 
 - Local React diff explorer with evidence ranges, keyboard focus and return-to-finding navigation.
-- Persistent review inbox, Markdown export, search, filters and parentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“child comparisons.
+- Persistent review inbox, Markdown export, search, filters and parent-child comparisons.
 - Human decisions and comments remain separate from model hypotheses.
 - Bounded sequential batches, coverage diagnostics and explicitly confirmed selective recovery.
 - Local stdio MCP tools and a portable agent Skill; English and Spanish interface.
@@ -31,7 +31,7 @@ flowchart LR
 
 ## Try it
 
-Requirements: **Python 3.12**, **Node.js 24.x (recommended) or 22.x â‰¥22.12**, npm 9+ and Git on PATH.
+Requirements: **Python 3.12**, **Node.js 24.x (recommended) or 22.x >=22.12**, npm 9+ and Git on PATH.
 Dependencies are pinned. An API key is needed only for model analysis.
 
 Windows PowerShell, from the checkout:
@@ -90,7 +90,7 @@ of sensitive information. Review what you submit. Agent provenance is declared, 
 
 Native Linux/macOS validation, sanitized screenshots and broader MCP-client verification.
 Cross-file reasoning remains limited across independent batches. No finding, empty report or
-parentÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“child link certifies correctness or resolution.
+parent-child link certifies correctness or resolution.
 
 ## License
 

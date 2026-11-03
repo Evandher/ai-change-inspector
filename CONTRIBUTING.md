@@ -1,6 +1,6 @@
 # Contributing
 
-Use Python 3.12 and Node.js 24.x or 22.x â‰¥22.12. Follow [installation](docs/installation.md).
+Use Python 3.12 and Node.js 24.x or 22.x >=22.12. Follow [installation](docs/installation.md).
 Keep changes focused and preserve canonical file/hunk/reference IDs, immutable snapshots, human
 feedback and repository authorization. Do not execute audited material or model-suggested tests.
 Do not add automatic paid calls/retries. Use mocks and temporary databases; never test against

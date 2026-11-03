@@ -2,7 +2,7 @@
 
 ## Requirements
 
-Use Python **3.12.x** for the pinned dependency set, Node.js **24.x (recommended) or 22.x â‰¥22.12**, npm 9+, and Git.
+Use Python **3.12.x** for the pinned dependency set, Node.js **24.x (recommended) or 22.x >=22.12**, npm 9+, and Git.
 Confirm `python --version` is 3.12 on Windows (or use `py -3.12` if registered).
 The frontend engine follows Vitest: v22 ≥22.12, v24, or v26+; odd v23/v25 are excluded.
 Node 24.14.0 and Python 3.12.10 were exercised on this laptop.
@@ -76,12 +76,12 @@ Keep a backup and verify existing reviews after upgrading. One API worker/proces
 | --- | --- | --- |
 | `INSPECTOR_API_URL` | `http://127.0.0.1:8000` | Local API URL |
 | `INSPECTOR_WEB_URL` | `http://127.0.0.1:5173` | Exact local browser origin |
-| `INSPECTOR_MAX_AUDIT_REQUESTS` | 4 | 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“8 initial calls / one recovery action |
-| `INSPECTOR_BATCH_BYTES` | 24000 | 4096ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“131072 UTF-8 evidence bytes |
+| `INSPECTOR_MAX_AUDIT_REQUESTS` | 4 | 1-8 initial calls / one recovery action |
+| `INSPECTOR_BATCH_BYTES` | 24000 | 4096-131072 UTF-8 evidence bytes |
 | `INSPECTOR_MAX_OUTPUT_TOKENS` | 8192 | 16 through configured ceiling |
-| `INSPECTOR_OUTPUT_TOKEN_CEILING` | 8192 | 16ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“8192; 12288 unsupported |
-| `INSPECTOR_MAX_RECOVERIES_PER_BATCH` | 2 | 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“4 additional reservations |
-| `INSPECTOR_MAX_RECOVERIES_PER_REVIEW` | 4 | 1ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“16 additional reservations |
+| `INSPECTOR_OUTPUT_TOKEN_CEILING` | 8192 | 16-8192; 12288 unsupported |
+| `INSPECTOR_MAX_RECOVERIES_PER_BATCH` | 2 | 1-4 additional reservations |
+| `INSPECTOR_MAX_RECOVERIES_PER_REVIEW` | 4 | 1-16 additional reservations |
 
 Start helper supports literal `127.0.0.1` HTTP URLs and uses their ports. Set both URLs consistently
 when changing ports; configure MCP `--api-url` too. Shell-exported values override `.env`.

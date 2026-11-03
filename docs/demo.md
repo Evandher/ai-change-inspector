@@ -25,7 +25,7 @@ For partial results, inspect diagnostics. In Review Detail select only eligible 
 batches and review the confirmation's request count/output budget before confirming. This is paid.
 Do not recover just to demonstrate the screen; mocks verify the interaction without credits.
 
-## Release checklist â€” November 4, 2026
+## Release checklist - November 4, 2026
 
 - [ ] Run documented setup/start on a clean Windows checkout; retain logs without secrets.
 - [ ] Run Linux and macOS validation or keep their unverified labels.
