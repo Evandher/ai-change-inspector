@@ -3,12 +3,15 @@ import { Fragment } from 'react'
 import type { DiffFile, ParsedDiff } from '../types/diff'
 import { CodeText } from './CodeText'
 import { Icon } from './Icon'
+import { useEvidenceNavigation } from '../lib/evidenceNavigation'
 
 const lineClasses = { context: 'text-primary', addition: 'bg-success-soft text-primary', deletion: 'bg-danger-soft text-primary' }
 const lineSigns = { context: ' ', addition: '+', deletion: '−' }
 
 function FileView({ file, idPrefix }: { file: DiffFile; idPrefix: string }) {
   const { t } = useLanguage()
+  const navigation = useEvidenceNavigation()
+  const selected = navigation?.selected
   return (
     <article id={`${idPrefix}${file.file_id}`} className="diff-file overflow-hidden rounded-lg border border-edge bg-panel">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge px-4 py-4">
@@ -17,18 +20,27 @@ function FileView({ file, idPrefix }: { file: DiffFile; idPrefix: string }) {
         </div>
         <div className="flex gap-3 text-xs"><span className="text-secondary">{t(file.change_type)}</span><span className="text-success">+{file.additions}</span><span className="text-danger">−{file.deletions}</span></div>
       </header>
+      {file.hunks.length > 1 && <nav aria-label={t('hunkNavigation')} className="hunk-navigation">{file.hunks.map((hunk, index) => <a key={hunk.hunk_id} href={`#${idPrefix}${hunk.hunk_id}`} className="secondary-button">{index + 1} · {hunk.header}</a>)}</nav>}
       {file.metadata.length > 0 && <details className="border-b border-edge px-4 py-3 text-xs text-secondary"><summary className="cursor-pointer">{t('fileMetadata')}</summary><pre className="mt-3 overflow-x-auto leading-6">{file.metadata.join('\n')}</pre></details>}
       {file.is_binary ? <p className="p-5 text-sm text-secondary">{t('binary')}</p>
         : file.hunks.length === 0 ? <p className="p-5 text-sm text-secondary">{t('metadataOnly')}</p>
           : file.hunks.map((hunk) => (
             <section key={hunk.hunk_id} id={`${idPrefix}${hunk.hunk_id}`} aria-label={hunk.header}>
+              {selected?.reference.file_id === file.file_id && selected.reference.hunk_id === hunk.hunk_id && <div className="evidence-context" role="region" aria-label={t('selectedEvidence')}>
+                <p>{navigation?.scope && <strong>{navigation.scope} · </strong>}{selected.title} · {t(selected.reference.side === 'old' ? 'oldSide' : 'newSide')}:{selected.reference.line_start}–{selected.reference.line_end}</p>
+                <button type="button" className="secondary-button" onClick={navigation?.back}>{t('backToFinding')}</button>
+              </div>}
               <h4 className="overflow-x-auto bg-info-soft px-4 py-2 font-mono text-xs whitespace-pre text-info">{hunk.header}</h4>
               <div className="overflow-x-auto" tabIndex={0} role="region" aria-label={t('lines', { path: file.new_path ?? file.old_path ?? '' })}>
                 <table className="w-full border-collapse font-mono text-xs leading-6" aria-label={t('diffTable')}>
                   <thead className="sr-only"><tr><th>{t('old')}</th><th>{t('new')}</th><th>{t('type')}</th><th>{t('content')}</th></tr></thead>
                   <tbody>{hunk.lines.map((line) => (
                     <Fragment key={line.diff_line}>
-                      <tr id={`${idPrefix}${hunk.hunk_id}-line-${line.diff_line}`} data-file-id={file.file_id} data-hunk-id={hunk.hunk_id} className={lineClasses[line.kind]}>
+                      <tr id={`${idPrefix}${hunk.hunk_id}-line-${line.diff_line}`} tabIndex={-1} data-file-id={file.file_id} data-hunk-id={hunk.hunk_id} className={`${lineClasses[line.kind]}${selected && selected.reference.file_id === file.file_id && selected.reference.hunk_id === hunk.hunk_id && (() => {
+                        const ref = selected.reference
+                        const number = ref.side === 'old' ? line.old_line : line.new_line
+                        return number !== null && number >= ref.line_start && number <= ref.line_end
+                      })() ? ' evidence-selected' : ''}`}>
                         <td className="w-12 border-r border-edge/60 px-3 text-right align-top text-muted select-none">{line.old_line}</td>
                         <td className="w-12 border-r border-edge/60 px-3 text-right align-top text-muted select-none">{line.new_line}</td>
                         <td className="w-8 px-2 align-top select-none">{lineSigns[line.kind]}</td>
@@ -54,6 +66,7 @@ export function DiffExplorer({ result, idPrefix = '' }: { result: ParsedDiff | n
         {result && <p role="status" className="text-sm text-secondary">{t('files', { count: result.files.length })} <span className="ml-3 text-success">+{result.additions}</span> <span className="ml-2 text-danger">−{result.deletions}</span></p>}
       </div>
       {result ? <div className="space-y-4">
+        <p className="text-xs text-secondary">{t('contextHelp')}</p>
         {result.files.length > 1 && <nav aria-label={t('diffFiles')} className="flex flex-wrap gap-2">{result.files.map((file) => <a key={file.file_id} href={`#${idPrefix}${file.file_id}`} className="secondary-button break-all">{file.new_path ?? file.old_path}</a>)}</nav>}
         {result.files.map((file) => <FileView key={file.file_id} file={file} idPrefix={idPrefix} />)}
       </div> : <div className="rounded-lg border border-edge bg-panel/40 px-6 py-16 text-center"><p className="font-medium text-primary">{t('start')}</p><p className="mt-2 text-sm text-muted">{t('startHelp')}</p></div>}

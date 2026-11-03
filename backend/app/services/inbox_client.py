@@ -7,6 +7,7 @@ from httpx2 import Client as HttpClient
 from httpx2 import HTTPError
 from pydantic import ValidationError
 
+from app.audit_models import AgentSource, CaptureCoverage
 from app.feedback_models import ReviewFeedback
 from app.inspection_models import ChangeScope, InspectionError
 from app.local_settings import loopback_url, web_url
@@ -30,6 +31,9 @@ def submit_review(
     text: str,
     base_url: str,
     parent_review_id: str | None = None,
+    *,
+    agent_source: AgentSource = "unknown",
+    capture_coverage: CaptureCoverage | None = None,
 ) -> ReviewDetail:
     base = loopback_url(base_url)
     identifier = str(uuid4())
@@ -74,6 +78,8 @@ def submit_review(
                     "repository_root": str(repository.root),
                     "scope": scope,
                     "diff": text,
+                    "agent_source": agent_source,
+                    "capture_coverage": capture_coverage.model_dump() if capture_coverage else None,
                     **({"parent_review_id": parent_review_id} if parent_review_id else {}),
                 },
                 timeout=5,
@@ -82,7 +88,7 @@ def submit_review(
                 raise ValueError("Unexpected review ID")
             local_url = registered.review_url
             confirmed = True
-            return request(client, f"/api/reviews/{identifier}/analyze", {}, timeout=90)
+            return request(client, f"/api/reviews/{identifier}/analyze", {}, timeout=510)
     except SubmissionError:
         raise
     except (HTTPError, ValueError, ValidationError) as exc:

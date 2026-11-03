@@ -89,11 +89,19 @@ async def test_documented_calls_route_through_real_mcp_contract_without_side_eff
 
     assert set(example) == {"name", "developer_request", "tool", "arguments"}
     assert example["developer_request"]
-    audit = Mock(
-        side_effect=lambda repos, repository, scope, endpoint, parent=None: InspectionResult(
-            status="no_changes", repository=repository, scope=scope
-        )
-    )
+
+    def mock_audit(
+        repos,
+        repository,
+        scope,
+        endpoint,
+        parent=None,
+        include_untracked=False,
+        agent_source="unknown",
+    ):
+        return InspectionResult(status="no_changes", repository=repository, scope=scope)
+
+    audit = Mock(side_effect=mock_audit)
     lookup = Mock(
         side_effect=lambda repos, repository, review_id, endpoint: FeedbackResult(
             status="error",
@@ -123,6 +131,8 @@ async def test_documented_calls_route_through_real_mcp_contract_without_side_eff
             args["scope"],
             "http://127.0.0.1:8000",
             args.get("parent_review_id"),
+            args.get("include_untracked", False),
+            args.get("agent_source", "unknown"),
         )
         lookup.assert_not_called()
     else:

@@ -1,5 +1,10 @@
 # AI Change Inspector — Handoff
 
+Actualización Sprint 9: las secciones originales describen el cierre de Sprint 8.
+Ver la sección 11 y README para el alcance nuevo; untracked permanece excluido por defecto,
+con inclusión optativa explícita desde Sprint 9. No asumir que el proceso API en ejecución
+ya cargó estos cambios.
+
 Documento portable para continuar en otra computadora y una sesión nueva de Codex.
 Las rutas de archivos son relativas a la raíz del proyecto. No contiene configuración
 privada del equipo, credenciales ni una copia de las instrucciones locales de agentes.
@@ -497,3 +502,31 @@ Secuencia de preparación, sin ejecutarla automáticamente al leer este handoff:
 No hay tareas futuras implícitamente autorizadas por este documento. La siguiente sesión debe
 comenzar verificando el estado real del checkout y la configuración, no suponiendo que procesos,
 URLs de revisiones históricas o permisos del equipo anterior siguen disponibles.
+
+## 11. Sprint 9 — Developer Experience & Audit Transparency
+
+- Review Detail exporta Markdown EN/ES mediante GET de la revisión persistida, sin análisis nuevo
+  ni guardado de borradores; incluye evidencia válida/inválida, feedback, parentesco y limitaciones.
+  El contenido va en bloques literales; se omiten raíz local y diff completo y se redactan patrones
+  de secretos/rutas absolutas mediante heurísticas. Revisar antes de compartir.
+- Inbox tiene búsqueda por prefijo de UUID, repositorio exacto, estado, severidad, agente declarado
+  y fechas UTC inclusivas; SQLite filtra y pagina. Los parámetros están documentados en README.
+- Procedencia opcional `agent_source` distingue Muse Code, Codex, Claude Code, otro y desconocido.
+  Es declarada, no autenticada; `origin=mcp` conserva su significado anterior.
+- `capture_coverage` opcional guarda versión, inclusión de untracked, cantidad de candidatos no
+  ignorados cuando se enumeraron, rutas relativas admitidas y contadores de exclusión sin rutas.
+  Datos históricos no registrados siguen desconocidos; el diff capturado aporta su propio conteo.
+- Migración SQLite aditiva: dos columnas, índices y protección de inmutabilidad de metadatos.
+  No hay reescritura de snapshots, resultados, decisiones ni relaciones históricas.
+- MCP añade `include_untracked=false` y `agent_source="unknown"`, preservando llamadas anteriores.
+  La captura optativa usa Git aislado para enumerar, nunca staging. Límites y controles de handles,
+  reparse points, hard links y cambios de archivo están en `services/untracked_capture.py`.
+  Solo texto UTF-8 y nombres/extensiones conservadores. Casos inseguros se excluyen o fallan.
+  Ignorados no se enumeran; no se afirma cobertura completa ni detección infalible de secretos.
+- DiffExplorer conserva IDs y Evidence Navigation; añade navegación entre hunks y nota de contexto.
+- Skill distribuible actualizado para los parámetros opcionales y Muse Code. Las copias personales
+  instaladas no se actualizan solas. No se modificaron configuraciones privadas de clientes.
+- Implementación validada con mocks y bases/repositorios temporales; ningún consumo real de Meta.
+  Los servicios activos y la base de demo no se reiniciaron ni migraron durante el desarrollo.
+  Para probar nuevas rutas en la web hay que reiniciar de forma controlada la API conservando
+  las variables de autorización/base de datos del operador. Revisar procesos antes de hacerlo.

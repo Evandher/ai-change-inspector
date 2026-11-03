@@ -3,6 +3,7 @@ import { useLanguage } from '../lib/i18n'
 import type { AnalysisResponse } from '../types/analysis'
 import { Icon } from './Icon'
 import { AnimatedDisclosure } from './AnimatedDisclosure'
+import { useEvidenceNavigation } from '../lib/evidenceNavigation'
 
 interface Props {
   analysis: AnalysisResponse | null
@@ -17,6 +18,7 @@ interface Props {
 
 export function FindingsPanel({ analysis, loading, error, canReview, onReview, readOnly = false, renderFeedback, idPrefix = '' }: Props) {
   const { t } = useLanguage()
+  const navigation = useEvidenceNavigation()
   return (
     <aside aria-labelledby={`${idPrefix}findings-title`} className="findings-panel">
       <div className="findings-heading"><h2 id={`${idPrefix}findings-title`}>{t('findings')}</h2><span>Muse Spark 1.3</span></div>
@@ -27,12 +29,15 @@ export function FindingsPanel({ analysis, loading, error, canReview, onReview, r
       {loading && <p role="status" className="mt-4 text-sm text-info">{t('waiting')}</p>}
       {error && <p role="alert" className="mt-4 break-words text-sm text-danger">{error}</p>}
       {analysis && <div className="mt-5 space-y-5">
+        {analysis.audit && analysis.audit.status !== 'completed' && <p role="alert" className="text-warning">{t('partialAuditWarning')}</p>}
         <details className="model-summary" open={!readOnly}><summary>{t('summary')}</summary>
           <p className="mt-2 text-sm whitespace-pre-wrap text-secondary">{analysis.summary}</p></details>
         {analysis.findings.length === 0 && <p role="status" className="text-sm text-secondary">{t('noFindings')}</p>}
-        {analysis.findings.map(({ hypothesis, reference_checks, all_references_valid }, index) => (
+        {analysis.findings.map(({ hypothesis, reference_checks, all_references_valid, batch_ids, attempt_ids }, index) => (
           <article key={index} className="finding min-w-0">
             <div className="finding-header"><span className={`finding-symbol severity-${hypothesis.severity}`}><Icon name="alert" /></span><div><h3 className="break-words text-sm font-semibold text-primary">{hypothesis.title}</h3><p className={`severity severity-${hypothesis.severity}`}>{t('severity')} {t(hypothesis.severity)}</p></div></div>
+            {!!batch_ids?.length && <p className="text-xs text-secondary">{t('batchLabel')}: {batch_ids.join(', ')}</p>}
+            {!!batch_ids?.length && <p className="text-xs break-all text-secondary">{t('attemptOrigin')}: {attempt_ids?.some(id => !id.startsWith('initial:')) ? `${t('recoveredResults')} · ${attempt_ids.join(', ')}` : t('originalResults')}</p>}
             <AnimatedDisclosure label={t('findingDetails')} defaultOpen={index === 0}>
             <p className="mt-3 break-words text-sm whitespace-pre-wrap text-secondary">{hypothesis.explanation}</p>
             <div className="finding-columns"><div><h4>{t('structuralEvidence')}</h4>
@@ -44,7 +49,12 @@ export function FindingsPanel({ analysis, loading, error, canReview, onReview, r
               const location = `${ref.path} · ${ref.side === 'old' ? t('oldSide') : t('newSide')}:${ref.line_start}–${ref.line_end}`
               return <li key={refIndex} className="break-all text-xs">
                 {check.status === 'valid' && check.diff_line !== null
-                  ? <a href={`#${idPrefix}${ref.hunk_id}-line-${check.diff_line}`} className="text-accent-hover underline">{location}</a>
+                  ? <a id={`${idPrefix}evidence-${index}-${refIndex}`} href={`#${idPrefix}${ref.hunk_id}-line-${check.diff_line}`} onClick={(event) => {
+                    if (!navigation || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+                    event.preventDefault()
+                    navigation.activate({ reference: ref, title: hypothesis.title,
+                      originId: `${idPrefix}evidence-${index}-${refIndex}`, targetId: `${idPrefix}${ref.hunk_id}-line-${check.diff_line}` })
+                  }} className="text-accent-hover underline">{location}</a>
                   : <span className="text-warning">{location}</span>}
                 <p className="mt-1 text-secondary">{t(check.reason)}</p>
                 <pre className="mt-2 max-h-40 overflow-auto rounded bg-canvas p-2 whitespace-pre text-primary">{ref.quote}</pre>

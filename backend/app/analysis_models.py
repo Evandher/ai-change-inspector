@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import ParseResponse
+from app.provider_models import AuditRun
 
 ShortText = Annotated[str, Field(min_length=1, max_length=2000)]
 
@@ -52,12 +53,15 @@ class ReferenceCheck(StrictModel):
 
 
 class CheckedFinding(StrictModel):
+    batch_ids: list[str] = Field(default_factory=list)
+    attempt_ids: list[str] = Field(default_factory=list)
     hypothesis: ModelFinding
     reference_checks: list[ReferenceCheck]
     all_references_valid: bool
 
 
 class AnalysisResponse(StrictModel):
+    audit: AuditRun | None = None
     model: Literal["muse-spark-1.3"]
     summary: str
     findings: list[CheckedFinding]

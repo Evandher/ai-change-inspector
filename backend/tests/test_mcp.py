@@ -154,7 +154,9 @@ def test_oversized_analysis_is_recoverable_without_meta(repositories, captured, 
     _, calls, _ = mock_meta
     captured.return_value = SIMPLE.replace("+new", "+" + "x" * (128 * 1024))
     result = inspect_repository(repositories, "project", "unstaged")
-    assert result.status == "error" and result.error.code == "analysis_too_large"
+    assert result.status == "error" and result.error.code == "audit_incomplete"
+    assert result.audit.batches[0].error_code == "hunk_too_large"
+    assert result.audit.request_count == 0
     assert calls == []
 
 

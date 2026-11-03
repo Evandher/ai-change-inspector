@@ -3,6 +3,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from app.analysis_models import CheckedFinding
+from app.audit_models import CaptureCoverage
+from app.provider_models import AuditRun
 
 ChangeScope = Literal["staged", "unstaged"]
 
@@ -29,11 +31,13 @@ class InspectionAnalysis(BaseModel):
 
 
 class InspectionResult(BaseModel):
+    audit: AuditRun | None = None
     model_config = ConfigDict(extra="forbid")
     status: Literal["completed", "no_changes", "blocked", "error", "pending", "analyzing"]
     repository: str
     scope: ChangeScope
-    untracked_policy: Literal["excluded"] = "excluded"
+    untracked_policy: Literal["excluded", "requested"] = "excluded"
+    capture_coverage: CaptureCoverage | None = None
     analysis: InspectionAnalysis | None = None
     error: RecoverableError | None = None
     review_id: str | None = None

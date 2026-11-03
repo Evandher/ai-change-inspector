@@ -1,3 +1,4 @@
+import { agentLabel } from '../lib/audit'
 import { useLanguage } from '../lib/i18n'
 import type { ReviewSummary } from '../types/review'
 import { ReviewLink } from './ReviewLink'
@@ -13,7 +14,7 @@ export function ReviewTable({ items, navigate }: { items: ReviewSummary[]; navig
           <a href={`/reviews/${review.review_id}`} className="review-link" aria-label={`${review.repository} · ${t(review.scope)}`} aria-describedby={`review-meta-${review.review_id}`} onClick={(event) => {
             if (!event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); navigate(`/reviews/${review.review_id}`) }
           }}>{t('reviewLabel')} <span className="font-mono">{review.review_id.slice(0, 8)}</span></a>
-          <div className="review-meta-row"><p className="review-id" id={`review-meta-${review.review_id}`}>{review.review_id}</p><p className="review-subtitle">MCP · {t(review.scope)}</p></div>
+          <div className="review-meta-row"><p className="review-id" id={`review-meta-${review.review_id}`}>{review.review_id}</p><p className="review-subtitle">MCP · {t(review.scope)} <span title={t('provenanceHelp')}> / {agentLabel(review.agent_source, t)}</span></p></div>
         </td>
         <td><span className={`status-badge status-${review.status}`}>{t(review.status)}</span></td>
         <td><time dateTime={review.created_at}>{new Date(review.created_at).toLocaleDateString(language)}<span className="block text-muted mt-1">{new Date(review.created_at).toLocaleTimeString(language)}</span></time></td>

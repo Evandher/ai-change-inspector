@@ -5,7 +5,7 @@ description: Coordinate AI Change Inspector audits and human feedback when a dev
 
 # AI Change Inspector
 
-Use this workflow with Codex or Claude Code. It coordinates an independent auditor,
+Use this workflow with Codex, Claude Code or Muse Code. It coordinates an independent auditor,
 not a self-approval mechanism. Reply in the developer's language; preserve report text,
 comments, paths, IDs and evidence quotes as returned.
 
@@ -19,7 +19,13 @@ comments, paths, IDs and evidence quotes as returned.
   `get_review_feedback`, without inventing a namespace or another tool.
 - Require the operator-authorized repository ID and an explicit scope, `staged` OR
   `unstaged`. Ask for a missing ID/scope; do not infer a directory or expand authorization.
-  Untracked files are excluded. Do not stage them, combine scopes, or bypass filters.
+  Untracked files are excluded by default. Set `include_untracked=true` only when the developer
+  explicitly requests new untracked files in this audit. This is separate from the chosen Git scope;
+  never stage files, combine scopes, or bypass filters. The result may exclude unsafe, sensitive,
+  binary, unsupported or oversized candidates and reports counts without their private paths.
+- Optional `agent_source` accepts `muse_code`, `codex`, `claude_code`, `other`, `unknown`.
+  Only supply a known client identity; omission means unknown. This is declared provenance, not
+  authenticated identity. It never grants permissions or alters human decisions.
 - The local API must be running; the web frontend is needed to open the review URL.
   If MCP is unavailable, report the missing connection and stop. Ask the operator to
   connect the existing server and enable both tools. Do not install/configure tools,
@@ -107,3 +113,19 @@ This skill does not match findings across reviews or prove resolution.
 
 For concrete request examples only, read [references/examples.json](references/examples.json).
 Their IDs are synthetic: replace them with actual returned IDs before using either tool.
+
+
+## Bounded large audits (Sprint 9.1)
+
+One `inspect_changes` invocation may make several distinct paid provider requests, up to the
+operator's configured limit (default 4, maximum 8), over the same registered snapshot.
+There are no automatic paid retries. A timed-out MCP client does not prove the analysis stopped;
+consult the registered review URL before considering another audit. The client tool timeout may
+need to allow up to 510 seconds. Do not change client settings without user authorization.
+
+Optional `audit` metadata describes batches, diagnostics and completed/unanalyzed hunk IDs.
+`audit.status=partial` is returned with external `status=error`, even when completed batches
+supply findings. Present these as partial hypotheses with their `batch_ids`, never as a successful
+full audit. Null diagnostics mean not recorded; do not infer token usage or output exhaustion.
+Only an explicit `max_output_tokens` reason confirms that budget failure. No batch receives
+other batches' reasoning or full repository context. Historical metadata must not be invented.

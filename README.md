@@ -194,8 +194,9 @@ oficiales de [Meta Responses](https://dev.meta.ai/docs/protocols/responses),
 [esquemas de Responses](https://dev.meta.ai/docs/api-reference/responses/schemas) y
 [Structured Outputs](https://dev.meta.ai/docs/structured-output).
 
-Se envía una sola solicitud, sin herramientas, sin historial, con `store: false`, timeout de
-60 segundos, máximo de 8192 tokens de salida y cero reintentos automáticos. No hay fallback a
+Desde Sprint 9.1 se envían lotes secuenciales acotados (por defecto hasta cuatro solicitudes),
+sin herramientas ni historial, con `store: false`, timeout de 60 segundos por llamada,
+máximo de 8192 tokens de salida por llamada y cero reintentos automáticos. No hay fallback a
 texto libre. Se rechazan rechazos del modelo, respuestas parciales, salidas de herramientas,
 JSON inválido y datos que no cumplen el contrato Pydantic estricto. Los errores del proveedor
 se traducen sin exponer su cuerpo, el diff ni la clave. La clave no se registra explícitamente.
@@ -210,7 +211,8 @@ localización del fragmento, no la certeza del riesgo, su severidad, el resumen 
 
 El límite del parser sigue siendo 1 MiB UTF-8. La revisión además limita el JSON del diff
 parseado a **128 KiB**, antes de cualquier llamada al modelo; si lo supera, pide reducir el diff.
-No se trunca ni se fragmenta silenciosamente. Este es un presupuesto local de entrada, no una
+Desde Sprint 9.1 se planifican lotes explícitos, sin truncar ni dividir hunks.
+Este es un presupuesto local de entrada por llamada, no una
 afirmación sobre la ventana de contexto del proveedor. Los cambios sin hunks textuales se
 rechazan antes de gastar créditos. Los binarios en diffs mixtos solo aportan metadatos.
 
@@ -676,7 +678,8 @@ su propia `MODEL_API_KEY`, por ejemplo con el comando de arranque del Sprint 4.
 Política de rutas:
 
 - El operador autoriza **raíces concretas** con `--repo ID=RUTA_ABSOLUTA`; puede repetir la opción.
-- La herramienta solo acepta ese ID y el alcance. No acepta rutas, comandos, variables de entorno,
+- La herramienta acepta ese ID y alcance, y parámetros opcionales documentados de parentesco,
+  procedencia e inclusión de untracked. No acepta rutas, comandos, variables de entorno,
   patrones de inclusión ni opciones para desactivar los filtros. Sin autorizaciones no arranca.
 - Las rutas se canonicalizan al iniciar y se comprueban de nuevo durante la captura; no se aceptan
   subdirectorios como repositorios adicionales ni escapes mediante symlinks/junctions conocidos.
@@ -700,9 +703,9 @@ Los dos argumentos son obligatorios:
 - `unstaged`: diff del árbol de trabajo contra el índice; no vuelve a incluir las modificaciones staged.
 - No existe alcance `all`: no se concatenan dos diffs ni se cuentan dos veces sus modificaciones.
   Dos auditorías explícitas son independientes y pueden compartir líneas de contexto.
-- **Untracked siempre excluidos**: no se listan ni leen sus contenidos y el MCP nunca ejecuta `git add`.
-  Para revisar un archivo nuevo, el usuario debe incorporarlo al índice por su cuenta antes de elegir
-  `staged`. El servidor no lo hace. Los ignored también quedan fuera salvo que ya estén rastreados.
+- **Untracked excluidos por defecto**: no se listan ni leen salvo petición explícita con
+  `include_untracked=true` (Sprint 9). El MCP nunca ejecuta `git add`. Los ignored quedan fuera
+  salvo que ya estén rastreados. Las exclusiones de nuevos candidatos se cuentan sin guardar sus rutas.
 - Se desactiva detección de renombrados: una operación puede aparecer como baja y alta, sin inferencias.
   Se ignoran submódulos. No se ejecutan pruebas, hooks, filtros, textconv ni diff externo.
 
@@ -781,7 +784,7 @@ El SDK publica `inputSchema`/`outputSchema` y devuelve JSON en `structuredConten
 El resultado contiene:
 
 - `status`: `completed`, `no_changes`, `blocked`, `error`, `pending` o `analyzing`.
-- `repository`, `scope`, `untracked_policy: "excluded"`.
+- `repository`, `scope`, `untracked_policy: "excluded"` o `"requested"`, y `capture_coverage` opcional.
 - `review_id`, `review_url`, `registration_confirmed` y `analysis_status` (ver Sprint 4).
 - `analysis`: `model`, `summary` y `findings`, o `null` cuando no se revisó.
 - Cada hallazgo conserva `hypothesis` (riesgo, explicación y `suggested_tests`),
@@ -1046,3 +1049,333 @@ Referencias oficiales: [formato de parches Git](https://git-scm.com/docs/diff-fo
 ## Licencia
 
 Se conserva íntegramente la licencia GNU GPL v3 existente en [LICENSE](LICENSE).
+
+
+## Sprint 9: developer experience and audit transparency
+
+Review Detail adds **Export Markdown** (EN/ES). Export fetches the current persisted review with
+GET; it never analyzes again, saves drafts or changes the snapshot. It includes file summaries,
+original hypotheses, severities, both valid and invalid references, suggested tests, saved human
+feedback, ancestry and coverage/limitations. Untrusted text is fenced with delimiters longer than
+any embedded backticks. Absolute local paths and recognizable secret values are redacted heuristically;
+the full raw diff and repository root are omitted. Inspect the file before sharing: neither path
+redaction nor secret detection guarantees removal of all private information. Exported suggestions
+and comments are data, never instructions to execute. Model findings are not proven defects.
+
+### Inbox queries
+
+`GET /api/reviews` preserves `limit` (1–100, default 20), `offset` (default 0), response shape and
+newest-first ordering (`created_at DESC, review_id DESC`). Optional parameters combine with AND:
+
+| Parameter | Meaning |
+| --- | --- |
+| `q` | Lowercase UUID prefix, up to 36 hexadecimal/hyphen characters |
+| `repository` | Exact logical repository ID (not a local root path) |
+| `status` | `pending`, `analyzing`, `completed`, `error` |
+| `severity` | At least one persisted finding of `low`, `medium`, `high`, `critical` |
+| `agent_source` | `muse_code`, `codex`, `claude_code`, `other`, `unknown` |
+| `date_from`, `date_to` | ISO calendar dates; inclusive UTC days |
+
+Filtering and counts run in SQLite before LIMIT/OFFSET, in one read transaction. Severity checks
+persisted JSON rather than fetching historical diffs to the browser. Date/repository/status/agent
+indexes assist common queries; searching finding severities still scans matching stored analyses.
+Inbox applies filters explicitly, resets pagination and supports clearing filters and empty results.
+Overview keeps its existing unfiltered totals/recent-batch behavior.
+
+### Provenance and historical compatibility
+
+Optional MCP parameters on `inspect_changes` are backward compatible:
+
+```json
+{"repository":"demo","scope":"unstaged","include_untracked":true,"agent_source":"muse_code"}
+```
+
+Both fields are optional: `include_untracked=false`, `agent_source="unknown"`. A user must explicitly
+request including untracked files. Provenance is client-declared metadata, not authenticated identity.
+It does not replace the existing `origin="mcp"`. No client identity is inferred from model text.
+ReviewCreate accepts optional `agent_source` and `capture_coverage`; responses add these fields.
+The existing Skill bundle describes the new options; installed client copies require updating.
+
+SQLite migration is additive on API startup/first store access: nullable coverage JSON and an agent
+column defaulting to unknown, plus indexes and an immutability trigger. It never changes historical
+diffs, evidence, model results, decisions or links. Use one API process per database. Stop the API
+before privately backing up an existing database. No migration of repository roots is performed.
+
+### Audit Coverage
+
+Captured file counts are derived from the stored parser snapshot. New MCP captures also record
+versioned capture metadata: whether untracked was requested, nonignored candidate count when
+requested, safe included relative paths and aggregate exclusion reasons (no rejected names/content).
+These capture metadata are declared by the submitting client and checked for internal consistency.
+Historical records retain Unknown / Not recorded; current Git is never consulted to fill gaps.
+
+For captures with metadata, completed analysis confirms the parsed snapshot was submitted (including
+binary metadata, not binary file content). Pending or known preflight failures report zero sent.
+In-progress, timeout, interrupted or other uncertain failures show Unknown / Not recorded: attempting
+a request does not prove delivery or complete analysis. Old analyses have no delivery metadata and
+remain unknown even if completed. Status/error and input-size limits stay explicit. No claim is made
+about whole-repository coverage, ignored files, tests executed or semantic correctness.
+
+### Safe opt-in untracked capture
+
+Tracked `staged` and `unstaged` capture remain unchanged. Opt-in untracked candidates are enumerated
+using isolated `git ls-files --others --exclude-standard -z` after normal Git layout/config validation.
+Ignored files are not enumerated. Files already in the index are not untracked; represented paths
+are also deduplicated. Git state is never modified. The selected tracked scope is not expanded.
+
+Limits: enumeration 64 KiB / 500 candidates, individual file 64 KiB, combined diff 1 MiB, serialized
+model input 128 KiB. Oversized enumeration fails explicitly; per-file exclusions are counted. There
+is no silent truncation. Only UTF-8 source/text extensions in `untracked_capture.py` and conservative
+ASCII relative names are admitted. Hidden paths, dependencies/build/private/artifact directories,
+sensitive paths, secret patterns, binaries/control bytes, unknown encodings/types, multiple hard
+links, unsafe paths and files that change during reading are rejected/excluded. Empty text files
+are represented as metadata-only additions, never invented hunks. CRLF is represented as LF for new
+file patches; source bytes remain untouched. A candidate that cannot be captured safely is excluded.
+
+Windows opens every ancestor with no reparse traversal and no delete sharing; the read handle also
+denies write sharing. Existing writers/reparse points cause exclusion. POSIX uses descriptor-relative
+O_NOFOLLOW traversal, regular-file checks and before/after stat validation; unsupported platforms fail
+closed. Git state and the filesystem do not form an atomic transaction, and privileged malicious
+filesystem mutation is outside these checks. Secret filters are heuristic, not infallible. No rejected
+content is persisted or transmitted. If all candidates are excluded and tracked diff is empty, MCP
+returns no_changes with exclusion metadata; it does not create a fictitious review. Tracked sensitive
+changes still block the complete audit as before; they are not silently dropped.
+
+DiffExplorer adds per-file hunk navigation, keeps file status/rename/binary indicators and Evidence
+Navigation anchors/highlights, and reminds reviewers that full-file/runtime context is unavailable.
+No full files are reread to enrich a historical review. Tests use mocks and temporary stores only;
+Sprint 9 does not consume Meta credits or automatically restart existing service processes.
+
+
+## Sprint 9.1 — Reliable Large Audits
+
+La autorización de una auditoría puede producir varias llamadas pagadas **distintas**, dentro
+del límite del operador; nunca un reintento automático de un lote fallido. Navegar, refrescar,
+exportar, leer feedback y volver a analizar una revisión terminal no invoca al proveedor.
+La revisión histórica Cotiza `488e0586-74df-48ff-bfe0-3396aad80367` no se reintenta ni se modifica.
+
+### Diagnósticos seguros
+
+Cada lote conserva únicamente la proyección permitida de metadatos: estado real, ID de respuesta,
+ID de solicitud si el SDK lo proporciona, presencia de `incomplete_details` y su `reason`, código
+de error del proveedor, HTTP status y tokens de entrada/salida/razonamiento disponibles.
+Los campos ausentes quedan en `null`; no se calculan tokens a partir de bytes ni se infiere
+agotamiento por alcanzar una cifra. Los valores de texto están acotados y filtrados; cuerpos de
+error, prompts, credenciales, texto parcial y mensajes arbitrarios del proveedor no se persisten.
+`max_output_tokens=8192` sigue fijo: este sprint no lo aumenta a ciegas.
+
+- `model_output_budget`: solo si el proveedor declara `incomplete_details.reason=max_output_tokens`.
+- `model_incomplete`: respuesta/mensaje no final sin agotamiento confirmado.
+- `model_provider_error`: estado de respuesta `failed`; se conserva el código disponible.
+- `model_timeout`: timeout; `model_invalid_output`: JSON/esquema inválido.
+- Los errores HTTP, de conexión, autenticación y cuota mantienen sus códigos anteriores.
+
+Una respuesta incompleta nunca aporta hallazgos, aunque incluya JSON aparentemente válido.
+Los diagnósticos no disponibles en revisiones anteriores permanecen desconocidos.
+
+### Planificación, límites y trazabilidad
+
+La API trabaja sobre el diff registrado una sola vez, autorizado y filtrado antes de cualquier
+envío. No ejecuta Git ni recaptura entre lotes. Primero agrupa archivos completos; si un archivo
+excede el presupuesto, lo divide por **hunks completos originales**, manteniendo sus IDs,
+coordenadas y contexto. Un hunk indivisible demasiado grande queda fallido (`hunk_too_large`),
+sin envío. Los archivos sin hunks se enumeran como metadatos sin análisis de texto, incluidos
+binarios y archivos vacíos. No se afirma cobertura textual sobre ellos.
+
+Variables opcionales del proceso FastAPI (no requieren cambiar MCP ni las autorizaciones):
+
+| Variable | Predeterminado | Rango |
+| --- | ---: | --- |
+| `INSPECTOR_MAX_AUDIT_REQUESTS` | 4 | 1–8 |
+| `INSPECTOR_BATCH_BYTES` | 24000 | 4096–131072 bytes UTF-8 |
+
+El presupuesto de bytes corresponde al JSON compacto de evidencia, excluye prompt/esquema y no
+representa un número de tokens. Configuraciones fuera del rango fallan antes de llamar al modelo.
+Los lotes sobre el límite de solicitudes quedan pendientes con `request_limit`, sin envío.
+Errores de configuración, credenciales o cuota detienen los lotes restantes; otros fallos permiten
+procesar unidades independientes dentro del límite. No existe botón ni endpoint de reintento de lote.
+El transporte HTTP del MCP espera hasta 510 segundos para los ocho timeouts de 60 segundos;
+clientes Muse/Codex/Claude deben permitir una duración equivalente para `inspect_changes`.
+Si el cliente vence antes, consultar la revisión registrada: **no repetir automáticamente**.
+
+Los hallazgos se validan contra la instantánea original y se exige además pertenencia al lote.
+Referencias ajenas o inválidas siguen visibles como inválidas, sin navegación inventada.
+Se eliminan duplicados exactos de hipótesis **y comprobaciones**; no se fusionan riesgos por
+similitud semántica. Cada hallazgo conserva `batch_ids` (sin cambiar referencias canónicas).
+Cada lote registra estado pendiente/completado/fallido/incompleto, cobertura e intento de llamada.
+La intención se guarda antes de enviar: una caída puede dejar un intento pendiente con diagnóstico
+no disponible. Al arrancar, se conserva lo completado y se marca global parcial/incompleto;
+no se reanuda ni se vuelve a cobrar silenciosamente.
+
+Solo todos los lotes completados producen estado externo `completed`. Si hay resultados útiles
+pero cobertura faltante, `audit.status=partial`, `status=error`, `error.code=audit_partial` y
+`analysis` conserva lo completado. Sin lotes completados, `analysis=null` y estado incompleto.
+Esta distinción evita que clientes antiguos interpreten un parcial como éxito. Los estados externos
+MCP anteriores no cambian; `audit` y `batch_ids` son campos aditivos opcionales. El endpoint manual
+`/api/diff/analyze` devuelve `analysis.audit` para resultados parciales, que la interfaz advierte.
+Las decisiones humanas sobre hallazgos terminales parciales siguen separadas y no certifican cobertura.
+
+**Limitación:** los lotes no comparten historia ni hacen síntesis adicional con Meta. Un riesgo que
+requiere contexto entre archivos o entre hunks puede pasar inadvertido. No equivale a auditar el
+repositorio completo. La interfaz EN/ES, comparaciones y exportación muestran cobertura, motivos,
+tokens conocidos y procedencia del lote. No se ejecutan pruebas sugeridas ni código auditado.
+
+### Persistencia compatible
+
+Migración aditiva: una columna nullable `reviews.audit_json`. No se cambia el CHECK de estados,
+no se reescriben diffs, resultados terminales, IDs, relaciones ni feedback anteriores.
+`analysis_json` guarda progresivamente resultados completos de lotes y el estado de auditoría;
+`audit_json` permite conservar diagnósticos incluso cuando no hay análisis válido.
+Los triggers de instantánea inmutable y revisión terminal permanecen activos.
+Las pruebas usan únicamente bases temporales; el servicio activo y su base no se migran para probar.
+Para activar el backend nuevo es necesario reiniciar FastAPI de forma controlada; antes conviene
+respaldar SQLite. No se requiere reiniciar Vite ni cambiar repositorios autorizados.
+
+### Payload compacto: medición sin proveedor
+
+Se preservan rutas, metadatos, headers, IDs, todas las líneas de contexto/código, espacios,
+coordenadas old/new y marcas de ausencia de newline. Las líneas se transportan como
+`[kind, old_line, new_line, content, no_newline]`. Se omiten únicamente claves repetidas por línea,
+`diff_line` (coordenada DOM que el validador obtiene del original) y totales derivables.
+Parser, instantánea persistida y contrato de evidencia permanecen intactos.
+
+Desde la raíz, medición reproducible **offline**, sin Git, SDK ni créditos:
+
+```powershell
+backend/.venv/Scripts/python.exe backend/scripts/measure_audit_payload.py examples/diffs/modified.diff examples/diffs/multiple-files.diff
+```
+
+| Ejemplo | JSON original | Compacto | Reducción |
+| --- | ---: | ---: | ---: |
+| `modified.diff` | 1047 | 660 | 36,96 % |
+| `multiple-files.diff` | 1892 | 1447 | 23,52 % |
+| Instantánea Cotiza citada (lectura SQLite, sin reauditar) | 109319 | 55257 | 49,45 % |
+
+Con valores predeterminados, Cotiza planifica tres lotes de 22832, 11763 y 20466 bytes:
+55061 bytes totales de evidencia. Esto excluye prompt y esquema repetidos por solicitud y
+**no acredita ahorro de tokens/coste ni éxito de una llamada real**. El script también informa
+la suma planificada, para hacer visible la sobrecarga de lotes en otros ejemplos.
+
+
+## Sprint 9.2 — Output budget and selective recovery
+
+### Bounded operator configuration
+
+`max_output_tokens` is now configured by the FastAPI operator, recorded before each request,
+and frozen for each reserved recovery attempt. Existing configurations still request **8192**.
+This is not an automatic adaptive increase: no code changes reasoning effort, batch size, model,
+provider, timeout, or retry count on failure.
+
+| Environment variable | Default | Valid range |
+| --- | ---: | --- |
+| `INSPECTOR_MAX_OUTPUT_TOKENS` | 8192 | 16 through the configured ceiling |
+| `INSPECTOR_OUTPUT_TOKEN_CEILING` | 8192 | 16–8192 |
+| `INSPECTOR_MAX_RECOVERIES_PER_BATCH` | 2 | 1–4 additional reservations |
+| `INSPECTOR_MAX_RECOVERIES_PER_REVIEW` | 4 | 1–16 additional reservations |
+
+The existing `INSPECTOR_MAX_AUDIT_REQUESTS` (default 4, range 1–8) also limits one recovery
+confirmation. An action reserves no more than the selected eligible batches, the per-action limit
+and the review's remaining allowance. Changing a ceiling below the requested budget is a
+configuration error; it never silently adjusts another parameter. Malformed or out-of-range
+configuration blocks submission before a provider call.
+
+**12288 remains blocked.** The official [Responses schema](https://dev.meta.ai/docs/api-reference/responses/schemas)
+defines `max_output_tokens` and rejects values above the model's configured maximum, but does not
+publish that maximum. The [Muse Spark model page](https://dev.meta.ai/docs/models) documents the
+context window, which does not establish an output maximum. No explicit hosted
+`muse-spark-1.3`/Responses compatibility for 12288 was found. The implementation therefore keeps
+8192 as both the default and the hard supported ceiling; it does not use a different model's
+limit, invoke the API to probe support, or infer compatibility from the input context window.
+
+The budget includes **reasoning plus visible output**, not just the displayed JSON. More allowed
+output can permit more generated reasoning, more latency and more billable output even when the
+visible report is short. A budget is a bound, not measured usage or a price estimate. Diagnostics
+retain actual reported usage, or null when absent. Input, output, reasoning and credits are never
+inferred from payload bytes. The unchanged 60-second transport timeout can still expire; a larger
+future validated budget would not guarantee completion. See [Meta's Responses guide](https://dev.meta.ai/docs/protocols/responses).
+
+### Eligibility and reconstruction
+
+Recovery reads the **original stored diff**, validates its SHA-256, reparses it with the unchanged
+canonical parser and compares the complete parse with `parsed_json`. Every original hunk must
+belong to exactly one recorded batch; file/hunk order, metadata-only files, payload byte counts,
+coverage and original finding provenance must match. Reconstruction never uses current Git state,
+reads repository source files for context, or splits/regenerates a hunk.
+
+Sprint 9.1 recipes are eligible only if these checks reproduce their recorded batches exactly.
+Missing `audit_json`, ambiguous membership, changed IDs, incompatible payloads or inconsistent
+coverage block recovery. Historical metadata is not backfilled. New Sprint 9.2 batches additionally
+record `payload_version=1` and `payload_sha256`; older hashes remain null and are not invented.
+A failed hunk larger than the current batch byte budget remains blocked. Batch sizes are not raised.
+
+Only **failed or incomplete** batches can be selected. Completed batches, including those completed
+by recovery, cannot run again. Original pending batches are not treated as confirmed failures and
+cannot be recovered by this mechanism. Every send rechecks the authorized ID/root and the original
+stored content against the current egress policy. Policy changes can block an otherwise reproducible
+historical recipe. No Git commands, audited code or suggested tests run during recovery.
+
+### Human confirmation and transport
+
+Review Detail shows eligible checkboxes, per-batch diagnostics, remaining limits and the maximum
+number of provider calls. Selection does not send anything. A second explicit confirmation displays
+the selected batches and requested output budget before calling:
+
+`POST /api/reviews/{review_id}/recovery`
+
+The JSON requires a UUIDv4 `request_id`, unique `batch_ids`, integer `expected_version`, `expected_output_budget` and
+`confirm_paid: true`. The endpoint requires the exact configured frontend `Origin`, plus existing
+loopback peer/Host/Origin checks, JSON content type and `X-Inspector-Request: 1`.
+These are local browser protections, **not authentication**: a hostile local program can forge
+headers. They do not cryptographically prove a human clicked. Agents must respect explicit human
+authorization; **no paid recovery tool is added to MCP**. Do not expose this local API publicly.
+
+A confirmation ID is idempotent. Reusing it with the same selection/version returns current state
+without repeating work; a different payload conflicts. A new ID with stale attempt version or a changed output budget also
+conflicts; it cannot silently authorize a larger budget than the developer confirmed. An atomic `BEGIN IMMEDIATE` transaction reserves every selected attempt, checks all
+allowances and takes a unique active-run slot for the review. Another action cannot execute its
+batches concurrently. The UI guards double clicks and retains the confirmation ID after a lost
+response; it never retries automatically. Refresh and inspect before making another paid decision.
+
+Reserved attempts consume allowance conservatively even if interrupted before sending. `started_at`
+records a local send intent, not proof of delivery or billing. Completed responses are retained;
+failed/incomplete responses retain only sanitized diagnostics. Authentication/configuration/quota
+failure stops the remaining action; unstarted reservations are explicitly stopped. A service restart
+marks abandoned queued/running attempts interrupted, preserves completed attempts, and never resumes
+paid work. A remaining interrupted failure requires another explicit confirmation and allowance.
+Use **one FastAPI worker/process per database**, as before; startup interruption recovery is not a
+multi-host lease protocol. Do not run multiple service instances over the same SQLite file.
+
+### Persistence and read projection
+
+The additive migration creates `review_recovery_runs` and `review_batch_attempts`, indexes and
+identity/terminal/delete protection triggers. It adds no columns to `reviews` and never updates or
+deletes its original terminal result. Each attempt stores its number, request ID, batch ID, times,
+requested budget, state, safe diagnostics and only completed validated results. No partial provider
+content, prompts, credentials or arbitrary error bodies are persisted. Initial attempt timestamps
+that were never recorded remain unknown.
+
+The API projects original results plus completed recovery results when reading the same review ID.
+Original findings stay at the same indexes; new findings append, preserving human feedback and drafts.
+Canonical references, DOM fragments and parser/validator contracts do not change. `attempt_ids` and
+`batch_ids` are additive result provenance; exact duplicates inside one attempt are removed, while
+results from different attempts are never silently conflated. Detail, comparison, inbox status,
+severity filters, timeline and feedback use the current projection. The original audit diagnostics
+remain accessible in `recovery.original_audit` and the UI attempt history.
+
+Only completion of **all required batches** projects `completed`; other states project partial or
+incomplete, preserving successful findings. Active recovery projects analyzing, not success. After recovery, the audit request counter includes
+started recovery intents and its lifetime upper bound includes the original call limit plus the
+configured review recovery allowance; the per-action limit remains separately displayed. Summary
+and filter queries account for recovery outcomes without rewriting original review rows. Coverage
+is still captured hunks only: cross-file and cross-batch context limitations from Sprint 9.1 remain.
+
+### Safe activation
+
+Tests use mocks and temporary databases. Sprint 9.2 development does not restart the live service,
+migrate its database or retry Cotiza. Before activation, back up SQLite consistently, keep the
+same authorized roots/database, then restart **only FastAPI** with one worker. Its startup creates
+the additive tables and handles abandoned recovery intents without provider calls. Reconnect MCP
+clients to load additive result metadata; their tool set remains unchanged. Confirm appropriate
+client timeouts for a selected action (up to 60 seconds per call plus overhead); losing an HTTP
+response does not cancel the backend or authorize repeating it. Do not change private configuration
+automatically. Review Detail keeps the current visual tokens, EN/ES and explicit confirmation.

@@ -12,6 +12,9 @@ from app.analysis_models import AnalysisResponse
 from app.feedback_models import FeedbackWrite, HumanFeedback, ReviewFeedback
 from app.inspection_models import RecoverableError
 from app.models import ParseResponse
+from app.provider_models import AuditRun
+from app.recovery_store import EFFECTIVE_STATUS, RecoveryStore
+from app.recovery_store import SCHEMA as RECOVERY_SCHEMA
 from app.review_models import (
     ReviewComparison,
     ReviewCreate,
@@ -77,7 +80,30 @@ class ReviewRepository:
         self.path = path
         self.web_base = web_base
         with self.connection() as connection:
-            connection.executescript(SCHEMA)
+            connection.executescript(SCHEMA + RECOVERY_SCHEMA)
+            # Serialize additive migration checks across concurrent first requests.
+            connection.execute("BEGIN IMMEDIATE")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(reviews)")}
+            if "agent_source" not in columns:
+                connection.execute(
+                    "ALTER TABLE reviews ADD COLUMN agent_source TEXT NOT NULL DEFAULT 'unknown'"
+                )
+            if "audit_json" not in columns:
+                connection.execute("ALTER TABLE reviews ADD COLUMN audit_json TEXT")
+            if "coverage_json" not in columns:
+                connection.execute("ALTER TABLE reviews ADD COLUMN coverage_json TEXT")
+            connection.executescript("""
+                CREATE TRIGGER IF NOT EXISTS immutable_audit_metadata
+                BEFORE UPDATE OF agent_source,coverage_json ON reviews
+                BEGIN SELECT RAISE(ABORT, 'immutable audit metadata'); END;
+                CREATE INDEX IF NOT EXISTS reviews_created_idx
+                    ON reviews(created_at DESC,review_id DESC);
+                CREATE INDEX IF NOT EXISTS reviews_repository_idx
+                    ON reviews(repository,created_at DESC);
+                CREATE INDEX IF NOT EXISTS reviews_status_idx ON reviews(status,created_at DESC);
+                CREATE INDEX IF NOT EXISTS reviews_agent_idx
+                    ON reviews(agent_source,created_at DESC);
+            """)
 
     @contextmanager
     def connection(self):
@@ -97,14 +123,15 @@ class ReviewRepository:
             if connection is not None:
                 connection.close()
 
-    def _summary(self, row: sqlite3.Row) -> dict:
-        return {
+    def _summary(self, row: sqlite3.Row, include_recovery=True) -> dict:
+        data = {
             key: row[key]
             for key in (
                 "review_id",
                 "repository",
                 "repository_root",
                 "origin",
+                "agent_source",
                 "scope",
                 "created_at",
                 "finished_at",
@@ -116,7 +143,28 @@ class ReviewRepository:
             "error": json.loads(row["error_json"]) if row["error_json"] else None,
         }
 
-    def get(self, review_id: str) -> ReviewDetail:
+        if include_recovery:
+            with self.connection() as c:
+                latest = c.execute(
+                    "SELECT effective_status,error_code,finished_at FROM "
+                    "review_recovery_runs WHERE review_id=? ORDER BY rowid DESC LIMIT 1",
+                    (row["review_id"],),
+                ).fetchone()
+            if latest:
+                data.update(
+                    status=latest["effective_status"],
+                    finished_at=latest["finished_at"],
+                    error={
+                        "code": latest["error_code"],
+                        "message": "See recovery coverage.",
+                        "recoverable": True,
+                    }
+                    if latest["error_code"]
+                    else None,
+                )
+        return data
+
+    def get(self, review_id: str, *, include_recovery=True) -> ReviewDetail:
         with self.connection() as connection:
             row = connection.execute(
                 "SELECT * FROM reviews WHERE review_id = ?", (review_id,)
@@ -136,8 +184,10 @@ class ReviewRepository:
             ).fetchall()
         if row is None:
             raise ReviewError("review_not_found", "No se encontró la revisión.", 404)
-        return ReviewDetail(
-            **self._summary(row),
+        detail = ReviewDetail(
+            **self._summary(row, include_recovery=False),
+            audit=AuditRun.model_validate_json(row["audit_json"]) if row["audit_json"] else None,
+            capture_coverage=json.loads(row["coverage_json"]) if row["coverage_json"] else None,
             diff=row["diff"],
             parsed_diff=ParseResponse.model_validate_json(row["parsed_json"]),
             analysis=AnalysisResponse.model_validate_json(row["analysis_json"])
@@ -148,16 +198,61 @@ class ReviewRepository:
             feedback=[HumanFeedback(**dict(item)) for item in feedback],
         )
 
-    def list(self, limit: int, offset: int) -> ReviewPage:
+        return RecoveryStore(self).decorate(detail) if include_recovery else detail
+
+    def list(
+        self,
+        limit: int,
+        offset: int,
+        *,
+        q: str | None = None,
+        repository: str | None = None,
+        status: str | None = None,
+        severity: str | None = None,
+        agent_source: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> ReviewPage:
+        clauses, values = [], []
+        if q:
+            # UUIDs contain only ASCII hex and hyphens; use the primary-key range index.
+            clauses.append("review_id>=? AND review_id<?")
+            values.extend([q, q + "~"])
+        for name, value in (
+            ("repository", repository),
+            ("status", status),
+            ("agent_source", agent_source),
+        ):
+            if value:
+                clauses.append(f"{EFFECTIVE_STATUS if name == 'status' else name}=?")
+                values.append(value)
+        if severity:
+            clauses.append(
+                "(EXISTS (SELECT 1 FROM json_each(reviews.analysis_json, '$.findings') f "
+                "WHERE json_extract(f.value,'$.hypothesis.severity')=?) OR EXISTS ("
+                "SELECT 1 FROM review_batch_attempts a,json_each(a.result_json,'$.findings') f "
+                "WHERE a.review_id=reviews.review_id AND a.status='completed' "
+                "AND json_extract(f.value,'$.hypothesis.severity')=?))"
+            )
+            values.extend([severity, severity])
+        if date_from:
+            clauses.append("created_at>=?")
+            values.append(date_from)
+        if date_to:
+            clauses.append("created_at<?")
+            values.append(date_to)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
         with self.connection() as connection:
+            connection.execute("BEGIN")
             rows = connection.execute(
-                "SELECT review_id,repository,repository_root,origin,scope,created_at,finished_at,"
-                "status,diff_sha256,error_json FROM reviews "
-                "ORDER BY created_at DESC, review_id DESC "
-                "LIMIT ? OFFSET ?",
-                (limit, offset),
+                "SELECT review_id,repository,repository_root,origin,agent_source,scope,"
+                "created_at,finished_at,"
+                "status,diff_sha256,error_json FROM reviews"
+                + where
+                + " ORDER BY created_at DESC, review_id DESC LIMIT ? OFFSET ?",
+                (*values, limit, offset),
             ).fetchall()
-            total = connection.execute("SELECT COUNT(*) FROM reviews").fetchone()[0]
+            total = connection.execute("SELECT COUNT(*) FROM reviews" + where, values).fetchone()[0]
         return ReviewPage(items=[ReviewSummary(**self._summary(row)) for row in rows], total=total)
 
     def create(self, request: ReviewCreate, parsed: ParseResponse) -> ReviewDetail:
@@ -192,8 +287,8 @@ class ReviewRepository:
                     )
             connection.execute(
                 "INSERT INTO reviews (review_id,repository,repository_root,origin,scope,"
-                "created_at,diff,diff_sha256,parsed_json,status) "
-                "VALUES (?,?,?,'mcp',?,?,?,?,?,'pending') ON CONFLICT(review_id) DO NOTHING",
+                "created_at,diff,diff_sha256,parsed_json,agent_source,coverage_json,status) "
+                "VALUES (?,?,?,'mcp',?,?,?,?,?,?,?,'pending') ON CONFLICT(review_id) DO NOTHING",
                 (
                     identifier,
                     request.repository,
@@ -203,6 +298,10 @@ class ReviewRepository:
                     request.diff,
                     hashlib.sha256(request.diff.encode("utf-8")).hexdigest(),
                     parsed.model_dump_json(),
+                    request.agent_source,
+                    request.capture_coverage.model_dump_json()
+                    if request.capture_coverage
+                    else None,
                 ),
             )
             existing = connection.execute(
@@ -214,7 +313,18 @@ class ReviewRepository:
                     existing["repository"],
                     existing["repository_root"],
                     existing["scope"],
-                ) != (request.diff, request.repository, request.repository_root, request.scope):
+                    existing["agent_source"],
+                    existing["coverage_json"],
+                ) != (
+                    request.diff,
+                    request.repository,
+                    request.repository_root,
+                    request.scope,
+                    request.agent_source,
+                    request.capture_coverage.model_dump_json()
+                    if request.capture_coverage
+                    else None,
+                ):
                     raise ReviewError(
                         "review_conflict", "El ID ya identifica otra instantánea.", 409
                     )
@@ -229,7 +339,7 @@ class ReviewRepository:
         self, review_id: str, finding_index: int, data: FeedbackWrite
     ) -> HumanFeedback:
         snapshot = self.get(review_id)
-        if snapshot.status != "completed" or snapshot.analysis is None:
+        if snapshot.status not in ("completed", "error") or snapshot.analysis is None:
             raise ReviewError("feedback_not_ready", "Analysis has no reviewable findings.", 409)
         if not 0 <= finding_index < len(snapshot.analysis.findings):
             raise ReviewError("finding_not_found", "Finding does not exist.", 404)
@@ -286,7 +396,7 @@ class ReviewRepository:
 
     def timeline(self, review_id: str) -> ReviewTimeline:
         columns = (
-            "review_id,repository,repository_root,origin,scope,created_at,finished_at,"
+            "review_id,repository,repository_root,origin,agent_source,scope,created_at,finished_at,"
             "status,diff_sha256,error_json"
         )
         items: list[TimelineItem] = []
@@ -382,20 +492,57 @@ class ReviewRepository:
         parent, child = (first, second) if link[0] == review_id else (second, first)
         return ReviewComparison(parent=parent, child=child)
 
-    def finish(
-        self, review_id: str, analysis: AnalysisResponse | None, error: RecoverableError | None
-    ) -> None:
-        if (analysis is None) == (error is None):
-            raise ValueError("Exactly one analysis or error must be recorded.")
+    def save_progress(self, review_id: str, audit: AuditRun, analysis: AnalysisResponse | None):
         with self.connection() as connection:
             connection.execute(
-                "UPDATE reviews SET status=?,finished_at=?,analysis_json=?,error_json=? "
+                "UPDATE reviews SET audit_json=?,analysis_json=? "
                 "WHERE review_id=? AND status='analyzing'",
                 (
-                    "completed" if analysis is not None else "error",
+                    audit.model_dump_json(),
+                    analysis.model_dump_json() if analysis else None,
+                    review_id,
+                ),
+            )
+
+    def finish(
+        self,
+        review_id: str,
+        analysis: AnalysisResponse | None,
+        error: RecoverableError | None,
+        audit: AuditRun | None = None,
+    ) -> None:
+        if analysis is None and error is None:
+            raise ValueError("An analysis or error must be recorded.")
+        if (
+            analysis is not None
+            and error is not None
+            and not (analysis.audit and analysis.audit.status == "partial")
+        ):
+            raise ValueError("Only explicitly partial analysis may accompany an error.")
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT audit_json,analysis_json FROM reviews WHERE review_id=?", (review_id,)
+            ).fetchone()
+            audit = audit or (analysis.audit if analysis else None)
+            if audit is None and row and row["audit_json"]:
+                audit = AuditRun.model_validate_json(row["audit_json"])
+                audit.status = "partial" if audit.completed_hunk_ids else "incomplete"
+                for batch in audit.batches:
+                    if batch.status == "pending":
+                        batch.error_code = error.code if error else "analysis_interrupted"
+                if row["analysis_json"]:
+                    analysis = AnalysisResponse.model_validate_json(row["analysis_json"])
+                    analysis.audit = audit
+            connection.execute(
+                "UPDATE reviews SET status=?,finished_at=?,analysis_json=?,error_json=?,"
+                "audit_json=? "
+                "WHERE review_id=? AND status='analyzing'",
+                (
+                    "completed" if error is None else "error",
                     now(),
                     analysis.model_dump_json() if analysis is not None else None,
                     error.model_dump_json() if error is not None else None,
+                    audit.model_dump_json() if audit else None,
                     review_id,
                 ),
             )
@@ -403,14 +550,15 @@ class ReviewRepository:
     def recover_interrupted(self) -> None:
         error = RecoverableError(
             code="analysis_interrupted",
-            message=(
-                "El servicio se interrumpió durante el análisis. La instantánea se conserva; "
-                "no se reintentó la llamada al modelo."
-            ),
+            message="El servicio se interrumpió; no se reintentó la llamada al modelo.",
         )
         with self.connection() as connection:
-            connection.execute(
-                "UPDATE reviews SET status='error',finished_at=?,error_json=? "
-                "WHERE status='analyzing'",
-                (now(), error.model_dump_json()),
-            )
+            identifiers = [
+                r[0]
+                for r in connection.execute(
+                    "SELECT review_id FROM reviews WHERE status='analyzing'"
+                )
+            ]
+        for identifier in identifiers:
+            self.finish(identifier, None, error)
+        RecoveryStore(self).recover_interrupted()

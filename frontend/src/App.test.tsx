@@ -33,7 +33,9 @@ describe('diff workflow', () => {
     vi.stubGlobal('fetch', fetchMock)
     render(<App />)
     await userEvent.click(screen.getByRole('button', { name: 'Simple change' }))
-    expect(screen.getByLabelText('Git diff')).toHaveValue(examples[0].diff)
+    // Textarea values normalize CRLF from Windows checkouts to LF.
+    const displayedDiff = examples[0].diff.replace(/\r\n/g, '\n')
+    expect(screen.getByLabelText('Git diff')).toHaveValue(displayedDiff)
     await userEvent.click(screen.getByRole('button', { name: 'Parse diff' }))
     expect(await screen.findByRole('heading', { name: 'a.txt' })).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith('/api/diff/parse', {

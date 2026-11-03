@@ -1,8 +1,11 @@
+import { AuditExecution } from './AuditExecution'
+import { AuditCoverage } from './AuditCoverage'
 import type { HumanFeedback, ReviewDetail } from '../types/review'
 import { useLanguage } from '../lib/i18n'
 import { errorText } from '../lib/errors'
 import { DiffExplorer } from './DiffExplorer'
 import { FindingsPanel } from './FindingsPanel'
+import { EvidenceNavigation } from './EvidenceNavigation'
 
 function HumanFeedbackView({ feedback }: { feedback?: HumanFeedback }) {
   const { t, language } = useLanguage()
@@ -27,9 +30,13 @@ export function ReviewSnapshot({ review, side }: { review: ReviewDetail; side: '
     {review.status === 'pending' && <p role="status">{t('pendingSnapshot')}</p>}
     {review.status === 'analyzing' && <p role="status">{t('inProgress')}</p>}
     </header>
+    <AuditExecution review={review} />
+        <AuditCoverage review={review} />
+    <EvidenceNavigation analysis={review.analysis} parsed={review.parsed_diff} prefix={prefix} scope={title}>
     <DiffExplorer result={review.parsed_diff} idPrefix={prefix} />
     <FindingsPanel analysis={review.analysis} loading={false} error="" canReview={false} onReview={() => {}} readOnly idPrefix={prefix}
       renderFeedback={(index) => <HumanFeedbackView feedback={review.feedback.find((item) => item.finding_index === index)} />} />
+    </EvidenceNavigation>
     <details><summary className="cursor-pointer text-sm">{t('originalDiff')}</summary>
       <p className="mt-3 break-all font-mono text-xs text-secondary">SHA-256: {review.diff_sha256}</p>
       <textarea aria-label={`${title} · ${t('originalDiff')}`} readOnly spellCheck={false} wrap="off" value={review.diff} className="mt-3 h-56 w-full rounded bg-canvas p-3 font-mono text-xs" /></details>

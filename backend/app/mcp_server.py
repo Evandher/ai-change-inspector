@@ -14,6 +14,7 @@ from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 from pydantic import UUID4, Field
 
+from app.audit_models import AgentSource, CaptureCoverage
 from app.feedback_models import FeedbackResult
 from app.inspection_models import (
     ChangeScope,
@@ -32,6 +33,7 @@ from app.services.git_capture import (
 )
 from app.services.inbox_client import SubmissionError, fetch_feedback, submit_review
 from app.services.model_client import AnalysisError
+from app.services.untracked_capture import capture_untracked
 
 
 def inspect_repository(
@@ -40,7 +42,10 @@ def inspect_repository(
     scope: ChangeScope,
     service_url: str | None = None,
     parent_review_id: str | None = None,
+    include_untracked: bool = False,
+    agent_source: AgentSource = "unknown",
 ) -> InspectionResult:
+    coverage = None
     try:
         authorized = repositories.get(repository)
         if authorized is None:
@@ -50,13 +55,33 @@ def inspect_repository(
         if parent_review_id is not None:
             fetch_feedback(authorized, parent_review_id, service_url or api_url())
         text = capture_changes(authorized, scope)
+        coverage = CaptureCoverage()
+        if include_untracked:
+            text, coverage = capture_untracked(authorized, text)
         if not text:
-            return InspectionResult(status="no_changes", repository=repository, scope=scope)
+            return InspectionResult(
+                status="no_changes",
+                repository=repository,
+                scope=scope,
+                untracked_policy="requested" if include_untracked else "excluded",
+                capture_coverage=coverage,
+            )
         parsed = parse_diff(text)
         check_egress(authorized.root, text, parsed)
-        review = submit_review(authorized, scope, text, service_url or api_url(), parent_review_id)
+        review = submit_review(
+            authorized,
+            scope,
+            text,
+            service_url or api_url(),
+            parent_review_id,
+            agent_source=agent_source,
+            capture_coverage=coverage,
+        )
         return InspectionResult(
             status=review.status,
+            audit=review.audit,
+            untracked_policy="requested" if include_untracked else "excluded",
+            capture_coverage=coverage,
             repository=repository,
             scope=scope,
             analysis=InspectionAnalysis(
@@ -78,6 +103,8 @@ def inspect_repository(
             status="error",
             repository=repository,
             scope=scope,
+            untracked_policy="requested" if include_untracked else "excluded",
+            capture_coverage=coverage,
             review_id=exc.review_id,
             review_url=exc.review_url,
             registration_confirmed=exc.confirmed,
@@ -88,6 +115,8 @@ def inspect_repository(
             status="blocked" if exc.blocked else "error",
             repository=repository,
             scope=scope,
+            untracked_policy="requested" if include_untracked else "excluded",
+            capture_coverage=coverage,
             error=RecoverableError(code=exc.code, message=str(exc)),
         )
     except (DiffParseError, AnalysisError) as exc:
@@ -95,6 +124,8 @@ def inspect_repository(
             status="error",
             repository=repository,
             scope=scope,
+            untracked_policy="requested" if include_untracked else "excluded",
+            capture_coverage=coverage,
             error=RecoverableError(code=exc.code, message=str(exc)),
         )
     except Exception:
@@ -103,6 +134,8 @@ def inspect_repository(
             status="error",
             repository=repository,
             scope=scope,
+            untracked_policy="requested" if include_untracked else "excluded",
+            capture_coverage=coverage,
             error=RecoverableError(
                 code="inspection_failed",
                 message="No se pudo completar la inspección de forma segura.",
@@ -176,10 +209,14 @@ def create_server(
         repository: Annotated[str, Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")],
         scope: ChangeScope,
         parent_review_id: UUID4 | None = None,
+        include_untracked: bool = False,
+        agent_source: AgentSource = "unknown",
     ) -> InspectionResult:
         """Register and audit exactly one authorized repository ID and staged OR unstaged changes.
 
-        Untracked files are excluded. Never writes Git state or runs repository code/tests.
+        Untracked files are excluded unless include_untracked=true is explicitly requested.
+        agent_source is optional declared provenance, not authenticated identity.
+        Never writes Git state or runs repository code/tests.
         Requires the local web service. Persists a filtered snapshot BEFORE Meta (paid call).
         Returns the persistent review ID, state and local review URL, even on provider failure.
         If registration is unconfirmed, consult that ID before retrying. No silent local fallback.
@@ -195,6 +232,8 @@ def create_server(
                 scope,
                 endpoint,
                 str(parent_review_id) if parent_review_id else None,
+                include_untracked,
+                agent_source,
             )
 
     @server.tool(

@@ -1,14 +1,17 @@
 from dataclasses import asdict
-from typing import Annotated
+from datetime import date, timedelta
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi import Path as ApiPath
 from pydantic import UUID4
 
+from app.audit_models import AgentSource
 from app.feedback_models import FeedbackWrite, HumanFeedback, ReviewFeedback
 from app.inspection_models import InspectionError, RecoverableError
 from app.local_settings import database_path, web_repositories, web_url
 from app.models import ParseResponse
+from app.recovery_models import RecoveryRequest
 from app.review_models import (
     ReviewComparison,
     ReviewCreate,
@@ -19,9 +22,12 @@ from app.review_models import (
 )
 from app.review_store import ReviewRepository
 from app.services.analysis import analyze_parsed
+from app.services.audit_batches import audit_progress
 from app.services.diff_parser import DiffParseError, parse_diff
 from app.services.egress_guard import check_egress
 from app.services.model_client import AnalysisError
+from app.services.recovery import execute_recovery
+from app.services.recovery_recipes import reconstruct_batches
 
 router = APIRouter(prefix="/api/reviews")
 
@@ -50,14 +56,50 @@ def register_review(request: ReviewCreate) -> ReviewDetail:
     root = authorized_root(request.repository, request.repository_root)
     parsed = parse_diff(request.diff)
     check_egress(root, request.diff, parsed)
+    if request.capture_coverage:
+        coverage = request.capture_coverage
+        added = {file.new_path for file in parsed.files if file.change_type == "added"}
+        if (
+            not set(coverage.included_untracked) <= added
+            or coverage.untracked_seen is not None
+            and len(coverage.included_untracked) + sum(coverage.exclusions.values())
+            != coverage.untracked_seen
+            or not coverage.include_untracked
+            and (
+                coverage.untracked_seen is not None
+                or coverage.included_untracked
+                or coverage.exclusions
+            )
+        ):
+            raise ReviewError("invalid_coverage", "Inconsistent capture metadata.", 422)
     return get_review_repository().create(request, ParseResponse.model_validate(asdict(parsed)))
 
 
 @router.get("", response_model=ReviewPage)
 def list_reviews(
-    limit: Annotated[int, Query(ge=1, le=100)] = 20, offset: Annotated[int, Query(ge=0)] = 0
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str | None, Query(max_length=36, pattern=r"^[0-9a-f-]*$")] = None,
+    repository: Annotated[str | None, Query(max_length=64, pattern=r"^[A-Za-z0-9_-]*$")] = None,
+    status: Literal["pending", "analyzing", "completed", "error"] | None = None,
+    severity: Literal["low", "medium", "high", "critical"] | None = None,
+    agent_source: AgentSource | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> ReviewPage:
-    return get_review_repository().list(limit, offset)
+    if date_from and date_to and date_from > date_to or date_to == date.max:
+        raise ReviewError("invalid_date_range", "Invalid date range.", 422)
+    return get_review_repository().list(
+        limit,
+        offset,
+        q=q,
+        repository=repository,
+        status=status,
+        severity=severity,
+        agent_source=agent_source,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=(date_to + timedelta(days=1)).isoformat() if date_to else None,
+    )
 
 
 @router.get("/{review_id}", response_model=ReviewDetail)
@@ -116,9 +158,17 @@ def analyze_review(review_id: UUID4) -> ReviewDetail:
         root = authorized_root(snapshot.repository, snapshot.repository_root)
         parsed = parse_diff(snapshot.diff)
         check_egress(root, snapshot.diff, parsed)
-        result = analyze_parsed(parsed)
+        with audit_progress(
+            lambda audit, analysis: repository.save_progress(identifier, audit, analysis)
+        ):
+            result = analyze_parsed(parsed)
     except (AnalysisError, DiffParseError, InspectionError) as exc:
-        repository.finish(identifier, None, RecoverableError(code=exc.code, message=str(exc)))
+        repository.finish(
+            identifier,
+            None,
+            RecoverableError(code=exc.code, message=str(exc)),
+            getattr(exc, "audit", None),
+        )
     except Exception:
         repository.finish(
             identifier,
@@ -129,5 +179,30 @@ def analyze_review(review_id: UUID4) -> ReviewDetail:
             ),
         )
     else:
-        repository.finish(identifier, result, None)
+        partial = result.audit is not None and result.audit.status != "completed"
+        repository.finish(
+            identifier,
+            result,
+            RecoverableError(code="audit_partial", message="Partial audit; see batch coverage.")
+            if partial
+            else None,
+        )
     return repository.get(identifier)
+
+
+@router.post("/{review_id}/recovery", response_model=ReviewDetail)
+def recover_review(review_id: UUID4, data: RecoveryRequest, request: Request) -> ReviewDetail:
+    # Explicit same-origin browser gate, in addition to loopback/Host/JSON/marker middleware.
+    # This is not authentication: a local program can forge Origin. No MCP retry tool exists.
+    if request.headers.get("origin") != web_url():
+        raise ReviewError("human_recovery_origin_required", "Use the local web interface.", 403)
+    repository = get_review_repository()
+    original = repository.get(str(review_id), include_recovery=False)
+    parsed, groups = reconstruct_batches(original)
+
+    def preflight():
+        root = authorized_root(original.repository, original.repository_root)
+        check_egress(root, original.diff, parsed)
+
+    preflight()
+    return execute_recovery(repository, original, data, parsed, groups, preflight)

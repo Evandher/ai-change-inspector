@@ -4,9 +4,12 @@ from uuid import uuid4
 from pydantic import UUID4, BaseModel, ConfigDict, Field
 
 from app.analysis_models import AnalysisResponse
+from app.audit_models import AgentSource, CaptureCoverage
 from app.feedback_models import HumanFeedback
 from app.inspection_models import ChangeScope, RecoverableError
 from app.models import ParseResponse
+from app.provider_models import AuditRun
+from app.recovery_models import RecoveryView
 
 ReviewStatus = Literal["pending", "analyzing", "completed", "error"]
 
@@ -19,9 +22,12 @@ class ReviewCreate(BaseModel):
     scope: ChangeScope
     diff: str = Field(strict=True)
     parent_review_id: UUID4 | None = None
+    agent_source: AgentSource = "unknown"
+    capture_coverage: CaptureCoverage | None = None
 
 
 class ReviewSummary(BaseModel):
+    agent_source: AgentSource = "unknown"
     review_id: str
     repository: str
     repository_root: str
@@ -36,6 +42,9 @@ class ReviewSummary(BaseModel):
 
 
 class ReviewDetail(ReviewSummary):
+    recovery: RecoveryView | None = None
+    audit: AuditRun | None = None
+    capture_coverage: CaptureCoverage | None = None
     diff: str
     parsed_diff: ParseResponse
     analysis: AnalysisResponse | None

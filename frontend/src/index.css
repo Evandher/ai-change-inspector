@@ -84,6 +84,11 @@
   ::selection { background: var(--accent-soft); }
   :target { scroll-margin-top: 80px; }
   tr:target { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .evidence-selected td { box-shadow: inset 0 1px var(--accent), inset 0 -1px var(--accent); }
+  .evidence-selected td:first-child { border-left: 3px solid #59C3FF; }
+  .evidence-context { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-left: 3px solid #59C3FF; background: var(--panel-background); font-size: 12px; }
+  .evidence-context p { overflow-wrap: anywhere; }
+  .finding-columns a[id] { scroll-margin-top: 80px; }
 }
 
 @layer components {
@@ -334,3 +339,17 @@
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }.navigation-action:hover svg { transform: none; } }
 @media (max-width: 560px) { .ledger-heading { flex-wrap: wrap; }.ledger-heading .navigation-action { margin-left: auto; } }
+
+.review-filters { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); }
+.review-filters label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.review-filters input, .review-filters select { min-width: 0; width: 100%; padding: 8px; color: var(--text-primary); background: var(--background); border: 1px solid var(--border); border-radius: 5px; color-scheme: dark; }
+.review-filters > p { grid-column: 1 / -1; }
+.audit-coverage dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); gap: 12px; margin-block: 14px; }
+.audit-coverage dt, .audit-coverage p { color: var(--text-secondary); font-size: 12px; }
+.audit-coverage dd { margin: 4px 0; font-size: 14px; }
+.audit-coverage p + p { margin-top: 8px; }
+.hunk-navigation { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; }
+.hunk-navigation a { font-family: monospace; font-size: 11px; overflow-wrap: anywhere; }
+
+.audit-diagnostics > div { display: flex; flex-wrap: wrap; gap: 0.5rem; padding-block: 0.2rem; }
+.audit-diagnostics dt { color: var(--text-secondary); min-width: 10rem; }

@@ -277,7 +277,7 @@ def test_invalid_model_output(mock_meta, kind):
     ("response", "code"),
     [
         (envelope(status="incomplete"), "model_incomplete"),
-        (envelope(status="failed"), "model_incomplete"),
+        (envelope(status="failed"), "model_provider_error"),
         (
             envelope(
                 output=[
