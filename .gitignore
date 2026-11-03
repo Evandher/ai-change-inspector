@@ -17,3 +17,19 @@ coverage/
 *.db
 *.db-*
 AGENTS.md
+
+# Private operator notes and runtime artifacts
+HANDOFF*.md
+AGENTS*.md
+*.log
+*.sqlite
+*.sqlite-*
+.DS_Store
+Thumbs.db
+/.release-validation/
+
+# Per-machine agent configuration (portable Skill lives under skills/)
+/.codex/
+/.claude/
+/.muse/
+/.agents/
